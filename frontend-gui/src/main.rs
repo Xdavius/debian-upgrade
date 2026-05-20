@@ -370,7 +370,12 @@ fn append_logs_batch(app: &AppWindow, lines: &[String]) {
         app.get_logs_text().to_string()
     };
 
-    app.set_logs_text(rendered.into());
+    let rendered_with_padding = if rendered.is_empty() {
+        rendered
+    } else {
+        format!("{rendered}\n\n")
+    };
+    app.set_logs_text(rendered_with_padding.into());
     if !app.get_logs_has_focus() {
         app.invoke_scroll_logs_to_end(i32::MAX);
     }

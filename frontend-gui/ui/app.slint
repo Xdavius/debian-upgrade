@@ -3,7 +3,7 @@ import { Button, CheckBox, ScrollView } from "std-widgets.slint";
 export component AppWindow inherits Window {
     in-out property <int> current_page: 1;
     in-out property <string> header_status: "Assistant pret";
-    in-out property <string> logs_text: "[info] Demarrage de l'assistant.";
+    in-out property <string> logs_text: "[info] Demarrage de l'assistant.\n\n";
     out property <bool> logs_has_focus: false;
 
     in-out property <bool> third_party_1_enabled: false;
@@ -172,10 +172,17 @@ export component AppWindow inherits Window {
 
                     ScrollView {
                         vertical-stretch: 1;
-                        Text {
-                            text: root.logs_text;
-                            wrap: word-wrap;
-                            color: #2f3a45;
+                        Rectangle {
+                            width: parent.width;
+                            Text {
+                                x: 0px;
+                                width: parent.width;
+                                text: root.logs_text;
+                                wrap: word-wrap;
+                                color: #2f3a45;
+                                horizontal-alignment: left;
+                                vertical-alignment: top;
+                            }
                         }
                     }
                 }
