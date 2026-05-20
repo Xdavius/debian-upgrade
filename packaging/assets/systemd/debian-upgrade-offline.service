@@ -1,0 +1,17 @@
+[Unit]
+Description=Debian major upgrade (offline)
+DefaultDependencies=no
+Requires=sysinit.target
+After=sysinit.target system-update-pre.target
+Before=system-update.target
+ConditionPathExists=/system-update
+FailureAction=reboot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/debian-upgrade/offline-upgrade.sh
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=system-update.target

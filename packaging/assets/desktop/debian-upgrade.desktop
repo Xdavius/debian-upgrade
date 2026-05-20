@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Debian Upgrade Assistant
+Comment=Prepare and run Debian major version upgrade
+Exec=debian-upgrade
+Icon=system-software-update
+Terminal=false
+Categories=System;Settings;

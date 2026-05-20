@@ -1,0 +1,27 @@
+[workspace]
+members = ["upgrade-core", "backend-cli", "frontend-gui"]
+default-members = ["backend-cli"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["Debian Upgrade Team"]
+
+[workspace.dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+debug = false
+incremental = false
