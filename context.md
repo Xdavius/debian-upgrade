@@ -220,7 +220,86 @@ Responsabilités:
     - `/usr/lib/systemd/system/debian-upgrade-offline.service`
   - La GUI arme uniquement le mode offline (lien `/system-update`, lien dans `system-update.target.wants`, `systemctl daemon-reload`) puis declenche le reboot.
   - Objectif: aucun fichier systeme critique cree "ad hoc" hors packaging.
+- Branchement execution page 2 GUI:
+  - Le bouton `Suivant` de la page 2 appelle maintenant `upgrade-core` en sequence:
+    - `CheckSources`
+    - `DisableThirdParty`
+  - En mode normal: execution reelle (`dry_run=false`).
+  - En mode `--debug`: execution simulee (`dry_run=true`) pour tests.
+  - Si execution normale echoue par manque de droits (`/etc/apt/...`), fallback automatique avec elevation privilegiee:
+    - appel du backend CLI via `pkexec`,
+    - fallback `zenity + sudo` si `pkexec` indisponible,
+    - reinjection des logs JSON backend dans l'UI.
+- Branchement execution page 3 GUI (preparation paquets):
+  - En mode normal: `PreparePackages` execute reellement (`dry_run=false`) pour lancer le nettoyage cache APT + telechargement paquets.
+  - En mode `--debug`: `PreparePackages` reste en simulation (`dry_run=true`).
+  - En cas d'echec par permissions, fallback automatique avec elevation privilegiee via backend CLI (`prepare-packages`) + reinjection des logs JSON.
+- Branchement execution page 4 GUI (test dry-run upgrade):
+  - La page 4 n'est plus une temporisation fictive: elle appelle `upgrade-core` via `DryRunUpgrade`.
+  - En mode normal: execution reelle de `apt-get -s dist-upgrade` (non interactif).
+  - En mode `--debug`: simulation.
+  - En cas d'echec par permissions, fallback automatique avec elevation privilegiee via backend CLI (`dry-run-upgrade`).
+- Journal logs / UX temps reel:
+  - Les sorties des commandes APT sont maintenant remontees ligne par ligne (streaming) dans `upgrade-core` au lieu d'attendre la fin de commande.
+  - Le chemin privilegie GUI (pkexec/zenity+sudo) relaie les logs backend en streaming vers l'UI sur toutes les pages branchees (`check-sources`/`disable-third-party`, `prepare-packages`, `dry-run-upgrade`).
+  - Auto-scroll logs ajuste: il suit la fin tant que la zone logs n'a pas le focus; pendant selection/copie, l'auto-scroll est suspendu pour eviter les sauts.
+  - Correctif anti-crash selection logs: pendant que la zone logs a le focus (selection active), les nouvelles lignes ne sont plus injectees en direct dans `TextEdit`; elles sont tamponnees puis re-appliquees apres perte de focus.
+  - Lissage UI unifie: toutes les pages utilisent maintenant une meme file d'events + flush cadence (20ms) en rendu ligne-par-ligne (et non par gros paquets), pour conserver un vrai effet stream tout en gardant la fluidite.
+  - Correctif blocage page 4 (chemin privilegie): suppression du risque de deadlock de pipes `stderr` dans les fonctions streaming `pkexec`/`sudo` (stderr redirige vers `null`, attente via `wait()`).
+  - Optimisation supplementaire anti-lag page 4: les lignes de logs d'un batch sont maintenant concatenees et poussees en une seule mise a jour `set_logs_text` (au lieu d'une reecriture par ligne), reduisant fortement le cout UI sur gros volumes.
+  - Correctif streaming page 4: le parseur backend traite maintenant `\\r` ET `\\n` comme separateurs de lignes (certaines sorties `apt-get -s` utilisent surtout des retours chariot), ce qui evite l'effet "rien puis bloc final".
+  - Correctif buffering IPC backend->GUI: `backend-cli` force un `stdout.flush()` apres chaque event JSON pour eviter la retention en buffer sur les executions via pipe (pkexec/sudo), en particulier visible sur la page 4.
+  - Correctif fluidite global logs: passage a un ring buffer borne (1200 lignes max) cote GUI pour eviter la croissance non bornee et les reecritures de texte gigantesques qui pouvaient figer la fenetre en page 4.
+  - Nouvelle tentative operationnelle demandee: clean des logs au lancement de la page 4 + throttle d'affichage global (`40ms`, `8` lignes max par flush) pour limiter la pression UI tout en conservant un flux progressif.
+  - Ajustement suivant demande utilisateur: suppression du `clear logs` automatique en page 4.
+  - Migration composant logs: abandon de `TextEdit` au profit d'un affichage `ScrollView + Text` pour limiter les instabilites liees a l'edition/selection sous gros flux.
+- Ajustements layout recents:
+  - Hauteur carte logs augmentee (`120px` -> `180px`) pour afficher davantage de lignes.
+  - Hauteur fenetre principale augmentee (`620px` -> `700px`) pour garder les boutons visibles.
+- Upgrade-core execution reelle:
+  - `DisableThirdParty`: desactivation effective des fichiers tiers `.list/.sources` (hors `debian.sources`) via renommage `*.disabled-by-debian-upgrade` en mode normal.
+  - `PreparePackages`: execution effective de `apt-get clean`, `apt-get update`, puis `apt-get --download-only dist-upgrade` en mode non interactif.
+  - Nouvelle commande `DryRunUpgrade`: execution de `apt-get -s dist-upgrade` en mode non interactif.
 - Optimisation build release:
   - Ajout d'un profil `[profile.release]` au workspace dans `Cargo.toml`.
   - Parametres actifs: `opt-level=3`, `lto=thin`, `codegen-units=1`, `strip=symbols`, `debug=false`, `incremental=false`.
   - Impact attendu: binaires release plus optimises/perf et plus petits pour le packaging.
+- Compatibilite toolchain Debian 12:
+  - Edition Rust du workspace ramenee de `2024` a `2021` dans `Cargo.toml`.
+  - Objectif: permettre build/check/test avec Cargo ancien de Debian 12 sans upgrade forcée.
+  - Validation effectuee: `build.sh` complet passe (check, tests backend, build release GUI+CLI, bundle `buildtest`).
+  - Compatibilite lockfile: `Cargo.lock` ajuste en `version = 3` (au lieu de `4`) pour prise en charge par le Cargo Debian 12.
+  - Pin de dependance transitive pour Cargo ancien: `home` forcee a `0.5.11` via lockfile (`cargo update -p home --precise 0.5.11`) car `0.5.12` exige edition 2024.
+  - Pin additionnel: `clru` forcee a `0.6.2` via lockfile (`cargo update -p clru --precise 0.6.2`) car `0.6.3` exige edition 2024.
+  - Pin additionnel: `linked_hash_set` forcee a `0.1.5` via lockfile (`cargo update -p linked_hash_set --precise 0.1.5`) car `0.1.6` exige edition 2024.
+  - Pin additionnel: `smithay-clipboard` forcee a `0.7.2` via lockfile (`cargo update -p smithay-clipboard --precise 0.7.2`) car `0.7.3` exige edition 2024.
+  - Pin additionnel: `indexmap` forcee a `2.13.0` via lockfile (`cargo update -p indexmap --precise 2.13.0`) car `2.14.0` exige edition 2024.
+  - Stabilisation TOML ecosystem: `proc-macro-crate` forcee a `3.2.0` (au lieu de `3.5.0`) pour retirer `toml_datetime 1.x`/`toml_edit 0.25.x` incompatibles Cargo Debian 12; retour sur `toml_datetime 0.6.11` + `toml_edit 0.22.27`.
+  - Pin additionnel rustc 1.63: `wayland-protocols` forcee a `0.31.0` (au lieu de `0.31.2`) pour contourner la contrainte MSRV >= 1.65.
+  - Pin additionnel rustc 1.63: `webpki-roots` forcee a `1.0.6` (au lieu de `1.0.7`) pour contourner la contrainte MSRV >= 1.64.
+  - Pin additionnel rustc 1.63: `winnow` forcee a `0.7.13` (au lieu de `0.7.15`) pour contourner la contrainte MSRV >= 1.65.
+  - Tentative de batch pin effectuee: certains crates ne peuvent pas etre downgrades arbitrairement a cause des contraintes semver transitives (`toml_write ^0.1.2`, `hashbrown ^0.16.1` via `indexmap`).
+  - Limite structurelle GUI (stack Slint/Winit): certaines deps imposent des versions minimales de rustc non contournables par pin simple (ex: `raw-window-handle ^0.5.2` via `glutin`).
+  - `build.sh` ajoute un fallback: si `rustc < 1.64`, build GUI saute proprement avec warning, backend continue d'etre build/test/package dans `buildtest`.
+  - Decision ulterieure: suppression volontaire de tous les pins temporaires de dependances (retour au resolver standard via `cargo update`) apres choix d'upgrade Cargo/toolchain cote utilisateur.
+  - Ajustement complementaire pour rustc 1.85 (Debian 13): reintroduction de pins utiles uniquement:
+    - `tower-http` -> `0.6.8`
+    - `url` -> `2.4.1` (retour sur `idna 0.4.0`, suppression stack ICU 2.2.0 exigeant rustc 1.86)
+    - `image` -> `0.25.8` (au lieu de `0.25.10` qui exige rustc 1.88)
+  - Validation: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK avec rustc 1.85.
+  - Contournement runtime GUI Debian 12/distrobox: `run-gui.sh` force `WINIT_UNIX_BACKEND=x11` par defaut pour eviter le panic Wayland `XKBNotFound` (surcharge possible via variable d'environnement).
+  - Hardening anti-freeze minimise/restauration (environnements Debian anciens/container): launcher GUI force aussi `SLINT_BACKEND=winit-software`, `WINIT_X11_SCALE_FACTOR=1`, `LIBGL_ALWAYS_SOFTWARE=1` par defaut.
+  - Retour a la strategie historique demandee:
+    - ajustement pragmatique runtime: launcher GUI force maintenant `SLINT_BACKEND=winit-software` et `WINIT_UNIX_BACKEND=x11` pour eviter les panics de chargement `libwayland-egl.so` en environnements incomplets;
+    - cette voie desactive la tentative Wayland au lancement depuis `run-gui.sh`;
+    - plus de variable "mode special" a activer manuellement par l'utilisateur.
+- Compatibilite Debian 12/13 sur normalisation APT:
+  - `upgrade-core` detecte maintenant si `apt modernize-sources` est disponible.
+  - Si disponible (Debian recentes), l'action planifiee l'utilise.
+  - Si indisponible (cas Debian 12), le workflow n'echoue pas et passe en fallback manuel sur `.list/.sources` avec log explicite.
+  - Regle explicite Debian 12 -> 13 anti-doublon:
+    - si `debian.sources` est present, il est prioritaire pour la migration (`Suites:` mis a jour).
+    - dans ce cas, `sources.list` n'est pas migre et est renomme en `/etc/apt/sources.bak`.
+    - si `debian.sources` est absent, fallback sur migration de `/etc/apt/sources.list`.
+    - la migration des suites couvre aussi les alias (`stable`, `oldstable`, `stable-updates`, `oldstable-updates`, `stable-security`, `oldstable-security`) vers le codename cible explicite.
+  - En `dry-run`, ces operations sont simulees et journalisees; en mode reel, elles sont appliquees.

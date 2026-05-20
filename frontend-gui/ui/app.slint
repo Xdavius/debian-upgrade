@@ -1,9 +1,10 @@
-import { Button, CheckBox, TextEdit } from "std-widgets.slint";
+import { Button, CheckBox, ScrollView } from "std-widgets.slint";
 
 export component AppWindow inherits Window {
     in-out property <int> current_page: 1;
     in-out property <string> header_status: "Assistant pret";
     in-out property <string> logs_text: "[info] Demarrage de l'assistant.";
+    out property <bool> logs_has_focus: false;
 
     in-out property <bool> third_party_1_enabled: false;
     in-out property <bool> third_party_2_enabled: false;
@@ -24,11 +25,11 @@ export component AppWindow inherits Window {
     callback request_reboot();
     callback close_app();
     public function scroll_logs_to_end(offset: int) {
-        logs_edit.set-selection-offsets(offset, offset);
+        // no-op with ScrollView-based logs component
     }
 
     width: 960px;
-    height: 620px;
+    height: 700px;
     title: "Debian Upgrade Assistant";
 
     Rectangle {
@@ -157,7 +158,7 @@ export component AppWindow inherits Window {
                 border-color: #d8dbe0;
                 border-width: 1px;
                 border-radius: 8px;
-                height: 120px;
+                height: 180px;
 
                 VerticalLayout {
                     padding: 14px;
@@ -169,11 +170,13 @@ export component AppWindow inherits Window {
                         color: #1b1e23;
                     }
 
-                    logs_edit := TextEdit {
+                    ScrollView {
                         vertical-stretch: 1;
-                        text: root.logs_text;
-                        read-only: true;
-                        wrap: word-wrap;
+                        Text {
+                            text: root.logs_text;
+                            wrap: word-wrap;
+                            color: #2f3a45;
+                        }
                     }
                 }
             }

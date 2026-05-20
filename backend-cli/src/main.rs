@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use std::io::Write;
 use upgrade_core::{emit_bootstrap, run_command, AppContext, Command as CoreCommand, DeferPeriod as CoreDeferPeriod, Event};
 
 #[derive(Parser, Debug)]
@@ -25,6 +26,7 @@ enum Commands {
     CheckSources,
     DisableThirdParty,
     PreparePackages,
+    DryRunUpgrade,
     ScheduleOfflineUpgrade,
     RunAll,
     Defer {
@@ -52,6 +54,7 @@ impl From<DeferPeriod> for CoreDeferPeriod {
 
 fn emit_json_stdout(event: Event) -> Result<()> {
     println!("{}", serde_json::to_string(&event)?);
+    std::io::stdout().flush()?;
     Ok(())
 }
 
@@ -75,6 +78,7 @@ fn main() -> Result<()> {
         Some(Commands::CheckSources) => run_command(ctx, CoreCommand::CheckSources, &mut sink),
         Some(Commands::DisableThirdParty) => run_command(ctx, CoreCommand::DisableThirdParty, &mut sink),
         Some(Commands::PreparePackages) => run_command(ctx, CoreCommand::PreparePackages, &mut sink),
+        Some(Commands::DryRunUpgrade) => run_command(ctx, CoreCommand::DryRunUpgrade, &mut sink),
         Some(Commands::ScheduleOfflineUpgrade) => run_command(ctx, CoreCommand::ScheduleOfflineUpgrade, &mut sink),
         Some(Commands::RunAll) => run_command(ctx, CoreCommand::RunAll, &mut sink),
         Some(Commands::Defer { period }) => run_command(
