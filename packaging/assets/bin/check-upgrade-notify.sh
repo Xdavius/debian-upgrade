@@ -93,15 +93,13 @@ notify_for_session() {
   is_sudo_or_root_user "$user" || return 0
   should_skip_due_to_defer "$uid" && return 0
 
-  local xdg_runtime_dir dbus_bus display wayland_display
+  local xdg_runtime_dir dbus_bus
   xdg_runtime_dir="$(read_env_from_leader "$leader" XDG_RUNTIME_DIR)"
   [ -n "$xdg_runtime_dir" ] || xdg_runtime_dir="/run/user/${uid}"
   dbus_bus="$(read_env_from_leader "$leader" DBUS_SESSION_BUS_ADDRESS)"
   [ -n "$dbus_bus" ] || dbus_bus="unix:path=${xdg_runtime_dir}/bus"
-  display="$(read_env_from_leader "$leader" DISPLAY)"
-  wayland_display="$(read_env_from_leader "$leader" WAYLAND_DISPLAY)"
-
-  if [ -z "$display" ] && [ -z "$wayland_display" ]; then
+  if [ ! -S "${xdg_runtime_dir}/bus" ]; then
+    log "session ${session}: bus DBus absent pour ${user} (${xdg_runtime_dir}/bus)"
     return 0
   fi
 
@@ -110,8 +108,6 @@ notify_for_session() {
     sudo -u "$user" env \
       XDG_RUNTIME_DIR="$xdg_runtime_dir" \
       DBUS_SESSION_BUS_ADDRESS="$dbus_bus" \
-      DISPLAY="${display:-}" \
-      WAYLAND_DISPLAY="${wayland_display:-}" \
       notify-send \
         --app-name="$APP_NAME" \
         --icon="$APP_ICON" \
@@ -131,8 +127,6 @@ notify_for_session() {
       sudo -u "$user" env \
         XDG_RUNTIME_DIR="$xdg_runtime_dir" \
         DBUS_SESSION_BUS_ADDRESS="$dbus_bus" \
-        DISPLAY="${display:-}" \
-        WAYLAND_DISPLAY="${wayland_display:-}" \
         nohup "$GUI_BIN" >/dev/null 2>&1 &
       ;;
     defer_day)

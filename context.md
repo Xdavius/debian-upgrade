@@ -405,3 +405,11 @@ Responsabilités:
   - Cause: filtre trop strict du script sur `Type=x11|wayland`.
   - Correction: suppression du filtre `Type` dans `check-upgrade-notify.sh`; la detection de capacite graphique repose desormais sur la presence effective de `DISPLAY` ou `WAYLAND_DISPLAY` dans l'environnement du leader de session.
   - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Durcissement notifier DBus multi-environnements (X11/Wayland):
+  - Hypothese investiguee: l'envoi de notification depend surtout du bus DBus utilisateur, pas de `DISPLAY`/`WAYLAND_DISPLAY`.
+  - Script `check-upgrade-notify.sh` ajuste:
+    - suppression de la dependance explicite a `DISPLAY`/`WAYLAND_DISPLAY` pour `notify-send`,
+    - ciblage direct via `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`,
+    - ajout d'un garde-fou avec log explicite si le socket DBus utilisateur est absent.
+  - Packaging: ajout de la dependance `dbus-user-session` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK; `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.

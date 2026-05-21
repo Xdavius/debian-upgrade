@@ -11,6 +11,7 @@ maintainer="Debian Upgrade Team"
 depends=(
   "apt"
   "ca-certificates"
+  "dbus-user-session"
   "libnotify-bin"
   "pkexec"
   "sudo"
