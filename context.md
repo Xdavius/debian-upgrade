@@ -590,3 +590,11 @@ Responsabilités:
   - bump packaging pacstall:
     - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="1.3.1"`
   - validation post-bump: `cargo check` OK.
+- Correctif detection chemin offline natif PackageKit (evite hardcode `/usr/lib/...`):
+  - fichier: `backend-cli/src/main.rs` (`run_agent_arm_and_reboot`).
+  - condition native: `pkcon` present + `systemctl cat packagekit-offline-update.service` OK.
+  - resolution du chemin unite via `systemctl show -p FragmentPath --value packagekit-offline-update.service`.
+  - fallback interne sur `/usr/lib/...` puis `/lib/...` si FragmentPath vide.
+  - armement dans `/etc/systemd/system/system-update.target.wants/` avec lien vers le chemin resolu.
+  - objectif: declencher le chemin natif meme si l'unite n'est pas au chemin hardcode precedent.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.

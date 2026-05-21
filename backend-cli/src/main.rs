@@ -84,10 +84,21 @@ fn run_agent_arm_and_reboot() -> Result<()> {
     let script = r#"set -euo pipefail
 
 # Prefer native PackageKit offline update path (desktop-integrated progress screen).
-if command -v pkcon >/dev/null 2>&1 && [ -f /usr/lib/systemd/system/packagekit-offline-update.service ]; then
-  install -d -m 0755 /usr/lib/systemd/system/system-update.target.wants
-  ln -snf ../packagekit-offline-update.service \
-    /usr/lib/systemd/system/system-update.target.wants/packagekit-offline-update.service
+if command -v pkcon >/dev/null 2>&1 && systemctl cat packagekit-offline-update.service >/dev/null 2>&1; then
+  PK_UNIT_PATH="$(systemctl show -p FragmentPath --value packagekit-offline-update.service || true)"
+  if [ -z "${PK_UNIT_PATH}" ] || [ ! -f "${PK_UNIT_PATH}" ]; then
+    PK_UNIT_PATH="/usr/lib/systemd/system/packagekit-offline-update.service"
+  fi
+  if [ ! -f "${PK_UNIT_PATH}" ]; then
+    PK_UNIT_PATH="/lib/systemd/system/packagekit-offline-update.service"
+  fi
+  if [ ! -f "${PK_UNIT_PATH}" ]; then
+    echo "Service PackageKit offline introuvable sur disque."
+    exit 1
+  fi
+  install -d -m 0755 /etc/systemd/system/system-update.target.wants
+  ln -snf "${PK_UNIT_PATH}" \
+    /etc/systemd/system/system-update.target.wants/packagekit-offline-update.service
 
   # Prepare updates for offline transaction, then trigger native offline mode.
   pkcon -y --noninteractive refresh force || true
