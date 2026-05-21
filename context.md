@@ -420,3 +420,10 @@ Responsabilités:
     - `upgrade-core/Cargo.toml`
   - bump packaging pacstall: `pkgver=\"1.1.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
   - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Correctif action notification "Lancer la mise a niveau":
+  - Symptome observe en test VM: clic sur l'action `open` sans lancement de la GUI.
+  - Cause probable: absence d'attente explicite de la reponse d'action cote `notify-send`.
+  - Correction script notifier:
+    - ajout de `--wait` sur `notify-send` pour capturer l'action choisie,
+    - ajout de logs `logger` sur l'action recue et le lancement GUI.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
