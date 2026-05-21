@@ -59,3 +59,32 @@ cargo run -p frontend-gui --bin debian-upgrade
 ```bash
 cargo run -p frontend-gui --bin debian-upgrade -- --debug
 ```
+
+## Notification automatique (service systemd root)
+
+Le package installe un timer `systemd` (system-wide, execute en root) qui verifie periodiquement la disponibilite d'une nouvelle version majeure Debian.
+
+- Service: `debian-upgrade-notify.service`
+- Timer: `debian-upgrade-notify.timer`
+- Script: `/usr/local/lib/debian-upgrade/check-upgrade-notify.sh`
+
+Comportement:
+
+1. Verifie internet et lance `debian-upgrade-backend check-new-release`.
+2. Si une nouvelle majeure est detectee, envoie une notification interactive aux sessions graphiques actives:
+   - utilisateur `root`,
+   - utilisateurs membres du groupe `sudo`.
+3. Notification:
+   - app name `Debian-Upgrade`,
+   - icone `system-software-update`,
+   - urgence `critical`,
+   - expiration `0` (persistante tant qu'aucune action n'est prise).
+4. Actions directement dans la notification:
+   - lancer la GUI,
+   - reporter 1 jour / 1 semaine / 1 mois.
+5. Le report est memorise par utilisateur cible dans `/var/lib/debian-upgrade/notify/`.
+
+Ancien comportement retire:
+
+- plus de popup `zenity`,
+- plus de timer `systemd --user`.

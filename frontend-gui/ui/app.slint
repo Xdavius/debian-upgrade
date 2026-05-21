@@ -1,20 +1,17 @@
 import { Button, CheckBox, ScrollView } from "std-widgets.slint";
 
+export struct ThirdPartyRepo {
+    name: string,
+    enabled: bool,
+}
+
 export component AppWindow inherits Window {
     in-out property <int> current_page: 1;
     in-out property <string> header_status: "Assistant pret";
     in-out property <string> logs_text: "[info] Demarrage de l'assistant.\n\n";
     out property <bool> logs_has_focus: false;
 
-    in-out property <bool> third_party_1_enabled: false;
-    in-out property <bool> third_party_2_enabled: false;
-    in-out property <bool> third_party_3_enabled: false;
-    in-out property <string> third_party_1_name: "";
-    in-out property <string> third_party_2_name: "";
-    in-out property <string> third_party_3_name: "";
-    in-out property <bool> third_party_1_visible: false;
-    in-out property <bool> third_party_2_visible: false;
-    in-out property <bool> third_party_3_visible: false;
+    in-out property <[ThirdPartyRepo]> third_party_repos;
 
     callback go_next();
     callback go_prev();
@@ -24,6 +21,7 @@ export component AppWindow inherits Window {
     callback run_dry_run_upgrade();
     callback request_reboot();
     callback close_app();
+    callback set_third_party_enabled(int, bool);
     public function scroll_logs_to_end(offset: int) {
         // no-op with ScrollView-based logs component
     }
@@ -96,8 +94,8 @@ export component AppWindow inherits Window {
 
                     Text {
                         text: root.current_page == 1
-                            ? "Cet assistant vous guide pour preparer une mise a niveau majeure Debian de maniere controlee. Vous allez verifier les sources APT, gerer les depots tiers, preparer les paquets, tester la procedure puis finaliser au redemarrage."
-                            : root.current_page == 2
+                            ? "Cet assistant vous guide pour preparer une mise a niveau majeure Debian de maniere controlee.\nVous allez verifier les sources APT, gerer les depots tiers, preparer les paquets, tester la procedure puis finaliser au redemarrage.\nIl est fortement recommande d'avoir mis a jour votre systeme et d'avoir redemarre avant de continuer la procedure.\nLorsque vous cliquerez sur Suivant, votre systeme commencera a etre modifie et les sources de la distribution seront modifiees."
+                            : root.current_page == 2                        
                             ? "Par securite, tous les depots tiers sont desactives par defaut. Vous pouvez les re-activer manuellement si necessaire."
                             : root.current_page == 3
                             ? "Cette etape va nettoyer le cache APT et telecharger les paquets necessaires. Cliquez sur Suivant pour declencher."
@@ -111,14 +109,6 @@ export component AppWindow inherits Window {
                         vertical-stretch: 0;
                     }
 
-                    Text {
-                        visible: root.current_page == 5 || root.current_page == 6;
-                        text: "La procedure doit etre non interactive (DEBIAN_FRONTEND=noninteractive) avec choix par defaut pour eviter les blocages de questions APT.";
-                        wrap: word-wrap;
-                        color: #2f3a45;
-                        vertical-stretch: 0;
-                    }
-
                     Rectangle {
                         visible: root.current_page == 2;
                         background: #f8f9fb;
@@ -126,26 +116,18 @@ export component AppWindow inherits Window {
                         border-width: 1px;
                         border-radius: 6px;
                         padding: 10px;
-                        vertical-stretch: 0;
-                        VerticalLayout {
-                            spacing: 6px;
-                            CheckBox {
-                                visible: root.third_party_1_visible;
-                                text: "Depot tiers: " + root.third_party_1_name;
-                                checked <=> root.third_party_1_enabled;
-                                vertical-stretch: 0;
-                            }
-                            CheckBox {
-                                visible: root.third_party_2_visible;
-                                text: "Depot tiers: " + root.third_party_2_name;
-                                checked <=> root.third_party_2_enabled;
-                                vertical-stretch: 0;
-                            }
-                            CheckBox {
-                                visible: root.third_party_3_visible;
-                                text: "Depot tiers: " + root.third_party_3_name;
-                                checked <=> root.third_party_3_enabled;
-                                vertical-stretch: 0;
+                        vertical-stretch: 1;
+                        ScrollView {
+                            VerticalLayout {
+                                spacing: 6px;
+                                for repo[index] in root.third_party_repos: CheckBox {
+                                    text: "Depot tiers: " + repo.name;
+                                    checked: repo.enabled;
+                                    vertical-stretch: 0;
+                                    toggled => {
+                                        root.set_third_party_enabled(index, self.checked);
+                                    }
+                                }
                             }
                         }
                     }

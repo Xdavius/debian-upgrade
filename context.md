@@ -203,7 +203,7 @@ Responsabilités:
   - Redemarrage systeme declenche apres armement.
 - Mode debug conserve en simulation (pas d'action systeme destructive).
 - Demarrage du chantier packaging:
-  - Ajout d'un `pacscript` initial: `packaging/pacstall/debian-upgrade-deb.pacscript`.
+  - Ajout d'un `pacscript` initial: `packaging/pacstall/debian-upgrade.pacscript`.
   - Le package installe la GUI (`/usr/bin/debian-upgrade`) et le backend (`/usr/libexec/debian-upgrade-backend`).
   - Les fichiers systeme lies a l'upgrade hors-ligne sont packages explicitement (`/usr/local/lib/debian-upgrade/offline-upgrade.sh` et `/usr/lib/systemd/system/debian-upgrade-offline.service`) pour garantir leur suppression a la desinstallation.
   - Ajout d'un launcher desktop (`/usr/share/applications/debian-upgrade.desktop`).
@@ -303,3 +303,120 @@ Responsabilités:
     - si `debian.sources` est absent, fallback sur migration de `/etc/apt/sources.list`.
     - la migration des suites couvre aussi les alias (`stable`, `oldstable`, `stable-updates`, `oldstable-updates`, `stable-security`, `oldstable-security`) vers le codename cible explicite.
   - En `dry-run`, ces operations sont simulees et journalisees; en mode reel, elles sont appliquees.
+
+### 2026-05-21
+
+- Relecture complete de `context.md` en debut de session pour reprise de contexte projet.
+- Confirmation explicite des axes actifs (GUI principale, backend moteur, workflow offline, fallback privilege, packaging, suivi continu).
+- Rappel utilisateur integre: journaliser systematiquement les evolutions de session directement dans `context.md`.
+- Ajout de commentaires explicatifs rapides au-dessus de chaque fonction Rust dans:
+  - `backend-cli/src/main.rs`
+  - `frontend-gui/build.rs`
+  - `frontend-gui/src/main.rs`
+  - `upgrade-core/src/lib.rs` (y compris fonctions publiques et test unitaire local).
+- Verification post-modification: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Refonte de la desactivation des depots tiers (sans renommage de fichiers) dans `upgrade-core`:
+  - Fichiers `.list` (et tolerance `.lsit`): les lignes actives commencant par `deb` ou `deb-src` sont commentees.
+  - Fichiers `.sources` (deb822): chaque entree de depot est forcee en `Enabled: no`;
+    - si `Enabled` existe deja: valeur remplacee par `no`,
+    - si `Enabled` est absente: ligne `Enabled: no` ajoutee pour l'entree.
+  - Support explicite des fichiers avec plusieurs depots (plusieurs stanzas) dans un meme `.sources`.
+  - Le mode `dry-run` journalise les modifications sans ecriture disque.
+- Validation post-refonte: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- GUI page depots tiers rendue dynamique et scrollable:
+  - Remplacement des 3 cases statiques par un modele Slint `third_party_repos` (liste de longueur variable).
+  - Affichage via `ScrollView` + repetition de `CheckBox`, permettant la selection quel que soit le nombre de depots (1, 10, ou plus).
+  - Ajout d'un callback UI `set_third_party_enabled` pour synchroniser l'etat coche/decoché dans le modele.
+  - Adaptation Rust (`frontend-gui/src/main.rs`):
+    - initialisation du `VecModel<ThirdPartyRepo>` depuis la detection systeme,
+    - lecture des depots re-actives depuis le modele dynamique (plus de limite a 3).
+  - Correctif syntaxe Slint associe: signature callback et texte page 1 rendu valide.
+- Validation post-modification UI: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement UX logs page 1/page 2:
+  - Le message de detection des depots tiers ("aucun depot" / nombre detecte) n'est plus affiche au demarrage page 1.
+  - Le message est maintenant emis lors du passage effectif vers la page 2 apres clic `Suivant` (verification release OK, ou bypass debug).
+  - Correction associee: texte multi-ligne page 1 rendu avec `\\n` valide Slint (suppression du literal invalide).
+- Validation post-correctif: `cargo check -p frontend-gui` OK.
+- Demarrage du service de detection de nouvelle majeure (notification utilisateur):
+  - Ajout du script `packaging/assets/bin/check-upgrade-notify.sh`:
+    - verifie session graphique, connectivite internet et presence des outils,
+    - lance `debian-upgrade-backend check-new-release`,
+    - detecte une nouvelle majeure via les evenements JSON backend,
+    - envoie une notification via `notify-send` avec:
+      - nom application: `Debian-Upgrade`
+      - icone: `system-software-update`
+    - propose ensuite une action utilisateur via liste deroulante (`zenity`):
+      - lancer la GUI `debian-upgrade`,
+      - reporter de 1 jour / 1 semaine / 1 mois.
+    - persiste le report local utilisateur dans `${XDG_STATE_HOME:-~/.local/state}/debian-upgrade/next-notify-epoch`.
+  - Ajout des unites `systemd --user`:
+    - `packaging/assets/systemd/user/debian-upgrade-notify.service`
+    - `packaging/assets/systemd/user/debian-upgrade-notify.timer`
+    - timer configure (`OnBootSec=15min`, `OnUnitActiveSec=1d`, `RandomizedDelaySec=30min`, `Persistent=true`).
+  - Packaging pacstall mis a jour:
+    - installation du script notifier + unites user systemd,
+    - activation vendor du timer via lien `timers.target.wants`,
+    - nouvelles dependances runtime: `libnotify-bin`, `zenity`.
+  - README enrichi avec une section "Notification automatique (service utilisateur)".
+- Validation:
+  - `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Refonte demandee du mecanisme de notification (suppression zenity, mode root multi-utilisateurs):
+  - Le notifier est maintenant pense pour un service `systemd` system-wide execute en root (plus `systemd --user`).
+  - Le script `check-upgrade-notify.sh` a ete remanie pour:
+    - verifier internet puis appeler `debian-upgrade-backend check-new-release`,
+    - cibler les sessions graphiques actives via `loginctl`,
+    - notifier plusieurs utilisateurs eligibles:
+      - `root`,
+      - membres du groupe `sudo`,
+    - envoyer une notification interactive `notify-send` avec actions directes:
+      - `open` (lancer la GUI),
+      - `defer_day`, `defer_week`, `defer_month`.
+  - Parametrage notification conforme demande:
+    - app name: `Debian-Upgrade`,
+    - icon: `system-software-update`,
+    - urgence `critical`,
+    - expiration `0` (notification persistante jusqu'a action selon le daemon).
+  - Le report est memorise par utilisateur (uid) dans `/var/lib/debian-upgrade/notify/`.
+- Unites systemd mises a jour:
+  - suppression des unites `packaging/assets/systemd/user/debian-upgrade-notify.{service,timer}`,
+  - ajout des unites system:
+    - `packaging/assets/systemd/debian-upgrade-notify.service`
+    - `packaging/assets/systemd/debian-upgrade-notify.timer`
+  - packaging pacstall adapte (installation dans `/usr/lib/systemd/system/` + symlink `timers.target.wants`).
+- Packaging/Docs:
+  - dependance `zenity` retiree du package,
+  - README mis a jour (service root, actions dans la notification, suppression popup zenity).
+  - Pacscript: ajout d'un hook `post_install()` qui execute `systemctl daemon-reload` puis `systemctl enable --now debian-upgrade-notify.timer` (mode tolerant avec `|| true`).
+  - Correctif compatibilite dependances Debian: remplacement de `policykit-1` par `pkexec` dans `packaging/pacstall/debian-upgrade.pacscript` (absence de candidate `policykit-1` sur l'environnement cible).
+  - Ajustement robustesse Pacstall pour toolchain Rust:
+    - retrait des contraintes versionnees `cargo>=...` / `rustc>=...` dans `makedepends` (evite les warnings dpkg sur version `<aucun>` lors de la resolution),
+    - ajout d'un controle explicite des versions minimales (`cargo`/`rustc` >= 1.85.0) dans `build()` avec message d'erreur clair en cas de version insuffisante.
+- Validation post-refonte:
+  - `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Hygiene depot: ajout de `*.deb` dans `.gitignore` pour eviter le suivi des artefacts de packaging.
+- Ajustement timer notification post-test utilisateur:
+  - `debian-upgrade-notify.timer` modifie pour un premier passage plus rapide apres boot.
+  - `OnBootSec` passe de `15min` a `5min`.
+  - `RandomizedDelaySec` passe de `30min` a `0` pour garantir un delai maximal de 5 minutes.
+- Correctif notifier suite test VM:
+  - Cas observe: session utilisateur remontee par `loginctl` en `tty1` (ex: `Type=tty`), notification absente malgre daemon notif fonctionnel.
+  - Cause: filtre trop strict du script sur `Type=x11|wayland`.
+  - Correction: suppression du filtre `Type` dans `check-upgrade-notify.sh`; la detection de capacite graphique repose desormais sur la presence effective de `DISPLAY` ou `WAYLAND_DISPLAY` dans l'environnement du leader de session.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Durcissement notifier DBus multi-environnements (X11/Wayland):
+  - Hypothese investiguee: l'envoi de notification depend surtout du bus DBus utilisateur, pas de `DISPLAY`/`WAYLAND_DISPLAY`.
+  - Script `check-upgrade-notify.sh` ajuste:
+    - suppression de la dependance explicite a `DISPLAY`/`WAYLAND_DISPLAY` pour `notify-send`,
+    - ciblage direct via `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`,
+    - ajout d'un garde-fou avec log explicite si le socket DBus utilisateur est absent.
+  - Packaging: ajout de la dependance `dbus-user-session` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK; `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Passage de version release:
+  - bump des crates Rust en `1.1.0`:
+    - `backend-cli/Cargo.toml`
+    - `frontend-gui/Cargo.toml`
+    - `upgrade-core/Cargo.toml`
+  - bump packaging pacstall: `pkgver=\"1.1.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.

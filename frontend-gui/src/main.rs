@@ -5,9 +5,11 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
+use slint::Model;
 
 use upgrade_core::{
     check_new_major_release, run_command, AppContext, Command as CoreCommand, Event as CoreEvent,
@@ -29,10 +31,12 @@ const MAX_LOG_LINES: usize = 1200;
 const LOG_FLUSH_INTERVAL_MS: u64 = 40;
 const LOG_LINES_PER_FLUSH: usize = 8;
 
+// Retourne le buffer temporaire de logs quand la zone de texte est focalisée.
 fn deferred_log_lines() -> &'static Mutex<Vec<String>> {
     DEFERRED_LOG_LINES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+// Retourne le ring buffer global utilisé pour borner l'historique des logs.
 fn log_ring() -> &'static Mutex<VecDeque<String>> {
     LOG_RING.get_or_init(|| Mutex::new(VecDeque::new()))
 }
@@ -42,11 +46,13 @@ struct RunMode {
     debug: bool,
 }
 
+// Détecte le mode debug à partir des arguments de lancement GUI.
 fn parse_run_mode() -> RunMode {
     let debug = std::env::args().any(|arg| arg == "--debug");
     RunMode { debug }
 }
 
+// Crée la fenêtre Slint avec fallback de backend de rendu si besoin.
 fn create_app_window_with_backend_fallback() -> Result<AppWindow, slint::PlatformError> {
     if std::env::var("SLINT_BACKEND").is_err() {
         std::env::set_var("SLINT_BACKEND", "winit-femtovg");
@@ -65,6 +71,7 @@ fn create_app_window_with_backend_fallback() -> Result<AppWindow, slint::Platfor
     }
 }
 
+// Exécute un script shell en privilèges élevés via pkexec.
 fn run_with_pkexec(script: &str) -> anyhow::Result<()> {
     let status = Command::new("pkexec")
         .arg("/bin/sh")
@@ -80,6 +87,7 @@ fn run_with_pkexec(script: &str) -> anyhow::Result<()> {
     }
 }
 
+// Lance un programme via pkexec et stream sa sortie standard ligne par ligne.
 fn run_with_pkexec_stream<F>(program: &str, args: &[&str], mut on_stdout_line: F) -> anyhow::Result<()>
 where
     F: FnMut(&str),
@@ -113,6 +121,7 @@ where
     }
 }
 
+// Fallback d'élévation via zenity (mot de passe) puis sudo non interactif.
 fn run_with_zenity_fallback(script: &str) -> anyhow::Result<()> {
     let output = Command::new("zenity")
         .arg("--password")
@@ -159,6 +168,7 @@ fn run_with_zenity_fallback(script: &str) -> anyhow::Result<()> {
     }
 }
 
+// Variante streaming du fallback zenity+sudo pour relayer les logs en direct.
 fn run_with_zenity_fallback_stream<F>(program: &str, args: &[&str], mut on_stdout_line: F) -> anyhow::Result<()>
 where
     F: FnMut(&str),
@@ -218,6 +228,7 @@ where
     }
 }
 
+// Résout le chemin du binaire backend (env, voisin, puis chemin système).
 fn backend_cli_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("DEBIAN_UPGRADE_BACKEND") {
         let pb = PathBuf::from(&p);
@@ -242,6 +253,7 @@ fn backend_cli_path() -> Option<PathBuf> {
     None
 }
 
+// Parse une ou plusieurs lignes JSON backend en événements UI robustes.
 fn parse_backend_json_events(stdout: &[u8]) -> Vec<UiEvent> {
     let mut out = Vec::new();
     let text = String::from_utf8_lossy(stdout);
@@ -267,6 +279,7 @@ fn parse_backend_json_events(stdout: &[u8]) -> Vec<UiEvent> {
     out
 }
 
+// Exécute des sous-commandes backend avec élévation et streaming d'événements.
 fn run_backend_subcommands_via_privileged_backend_stream<F>(
     debug: bool,
     subcommands: &[&str],
@@ -302,6 +315,7 @@ where
     Ok(())
 }
 
+// Arme le mode upgrade hors-ligne systemd puis déclenche le redémarrage.
 fn setup_offline_upgrade_and_reboot() -> anyhow::Result<()> {
     let setup_script = r#"set -euo pipefail
 
@@ -334,10 +348,12 @@ systemctl daemon-reload
     Ok(())
 }
 
+// Ajoute une seule ligne de log dans la vue UI.
 fn append_log(app: &AppWindow, line: &str) {
     append_logs_batch(app, &[line.to_string()]);
 }
 
+// Ajoute un lot de logs avec buffer différé, ring buffer et auto-scroll contrôlé.
 fn append_logs_batch(app: &AppWindow, lines: &[String]) {
     if lines.is_empty() {
         return;
@@ -381,6 +397,7 @@ fn append_logs_batch(app: &AppWindow, lines: &[String]) {
     }
 }
 
+// Convertit le niveau de log backend vers sa représentation texte UI.
 fn level_to_str(level: LogLevel) -> &'static str {
     match level {
         LogLevel::Debug => "debug",
@@ -391,6 +408,7 @@ fn level_to_str(level: LogLevel) -> &'static str {
     }
 }
 
+// Convertit l'état d'étape backend vers sa représentation texte UI.
 fn state_to_str(state: StepState) -> &'static str {
     match state {
         StepState::Pending => "pending",
@@ -400,6 +418,7 @@ fn state_to_str(state: StepState) -> &'static str {
     }
 }
 
+// Transforme un événement coeur backend en événement consommable par la GUI.
 fn core_to_ui_event(event: CoreEvent) -> UiEvent {
     UiEvent {
         level: level_to_str(event.level).to_string(),
@@ -409,10 +428,12 @@ fn core_to_ui_event(event: CoreEvent) -> UiEvent {
     }
 }
 
+// Applique un événement UI en l'écrivant dans la zone de logs.
 fn apply_ui_event(app: &AppWindow, evt: UiEvent) {
     append_log(app, &format!("[{}] {} ({}, {})", evt.level, evt.message, evt.step, evt.state));
 }
 
+// Planifie un flush périodique des événements tamponnés vers l'UI.
 fn schedule_log_flush(
     ui: slint::Weak<AppWindow>,
     pending: Arc<Mutex<Vec<UiEvent>>>,
@@ -458,6 +479,7 @@ fn schedule_log_flush(
     });
 }
 
+// Empile un événement UI dans la file et démarre le scheduler si nécessaire.
 fn publish_ui_event_batched(
     ui: &slint::Weak<AppWindow>,
     pending: &Arc<Mutex<Vec<UiEvent>>>,
@@ -477,6 +499,7 @@ fn publish_ui_event_batched(
     schedule_log_flush(ui.clone(), Arc::clone(pending), Arc::clone(scheduled));
 }
 
+// Détecte les dépôts tiers candidats dans /etc/apt/sources.list.d.
 fn detect_third_party_candidates() -> Vec<String> {
     let dir = Path::new("/etc/apt/sources.list.d");
     let mut files = Vec::new();
@@ -509,6 +532,7 @@ fn detect_third_party_candidates() -> Vec<String> {
     files
 }
 
+// Point d'entrée GUI: initialise la fenêtre, les callbacks et le workflow multi-pages.
 fn main() -> Result<(), slint::PlatformError> {
     let mode = parse_run_mode();
     let app = create_app_window_with_backend_fallback()?;
@@ -521,37 +545,32 @@ fn main() -> Result<(), slint::PlatformError> {
     window.set_position(slint::PhysicalPosition::new(x, y));
 
     let third_party = detect_third_party_candidates();
-    app.set_third_party_1_visible(false);
-    app.set_third_party_2_visible(false);
-    app.set_third_party_3_visible(false);
-    app.set_third_party_1_enabled(false);
-    app.set_third_party_2_enabled(false);
-    app.set_third_party_3_enabled(false);
+    let third_party_model = Rc::new(slint::VecModel::from(
+        third_party
+            .iter()
+            .map(|name| ThirdPartyRepo {
+                name: name.clone().into(),
+                enabled: false,
+            })
+            .collect::<Vec<_>>(),
+    ));
+    let third_party_count = third_party.len();
+    app.set_third_party_repos(slint::ModelRc::from(third_party_model.clone()));
 
-    if let Some(name) = third_party.first() {
-        app.set_third_party_1_name(name.as_str().into());
-        app.set_third_party_1_visible(true);
-    }
-    if let Some(name) = third_party.get(1) {
-        app.set_third_party_2_name(name.as_str().into());
-        app.set_third_party_2_visible(true);
-    }
-    if let Some(name) = third_party.get(2) {
-        app.set_third_party_3_name(name.as_str().into());
-        app.set_third_party_3_visible(true);
+    {
+        let model = third_party_model.clone();
+        app.on_set_third_party_enabled(move |index, enabled| {
+            let idx = index as usize;
+            if idx >= model.row_count() {
+                return;
+            }
+            if let Some(mut row) = model.row_data(idx) {
+                row.enabled = enabled;
+                model.set_row_data(idx, row);
+            }
+        });
     }
 
-    if third_party.len() > 3 {
-        append_log(
-            &app,
-            &format!(
-                "[info] {} depots detectes (.list/.sources), affichage limite aux 3 premiers.",
-                third_party.len()
-            ),
-        );
-    } else if third_party.is_empty() {
-        append_log(&app, "[info] Aucun depot tiers detecte dans /etc/apt/sources.list.d.");
-    }
     if mode.debug {
         append_log(&app, "[debug] Mode debug actif.");
     } else {
@@ -629,6 +648,17 @@ fn main() -> Result<(), slint::PlatformError> {
                         match result {
                             Ok(info) => {
                                 if info.update_available {
+                                    if third_party_count == 0 {
+                                        append_log(&app, "[info] Aucun depot tiers detecte dans /etc/apt/sources.list.d.");
+                                    } else {
+                                        append_log(
+                                            &app,
+                                            &format!(
+                                                "[info] {} depot(s) tiers detecte(s). La liste est scrollable pour tout afficher.",
+                                                third_party_count
+                                            ),
+                                        );
+                                    }
                                     append_log(
                                         &app,
                                         &format!(
@@ -639,6 +669,17 @@ fn main() -> Result<(), slint::PlatformError> {
                                     app.set_header_status("Nouvelle version detectee".into());
                                     app.set_current_page(2);
                                 } else if mode.debug {
+                                    if third_party_count == 0 {
+                                        append_log(&app, "[info] Aucun depot tiers detecte dans /etc/apt/sources.list.d.");
+                                    } else {
+                                        append_log(
+                                            &app,
+                                            &format!(
+                                                "[info] {} depot(s) tiers detecte(s). La liste est scrollable pour tout afficher.",
+                                                third_party_count
+                                            ),
+                                        );
+                                    }
                                     append_log(
                                         &app,
                                         "[warn] Aucune nouvelle version detectee, mais mode debug actif: poursuite autorisee.",
@@ -713,14 +754,13 @@ fn main() -> Result<(), slint::PlatformError> {
                         match result {
                             Ok(()) => {
                                 let mut enabled = Vec::new();
-                                if app.get_third_party_1_visible() && app.get_third_party_1_enabled() {
-                                    enabled.push(app.get_third_party_1_name().to_string());
-                                }
-                                if app.get_third_party_2_visible() && app.get_third_party_2_enabled() {
-                                    enabled.push(app.get_third_party_2_name().to_string());
-                                }
-                                if app.get_third_party_3_visible() && app.get_third_party_3_enabled() {
-                                    enabled.push(app.get_third_party_3_name().to_string());
+                                let repos = app.get_third_party_repos();
+                                for idx in 0..repos.row_count() {
+                                    if let Some(repo) = repos.row_data(idx) {
+                                        if repo.enabled {
+                                            enabled.push(repo.name.to_string());
+                                        }
+                                    }
                                 }
 
                                 if enabled.is_empty() {

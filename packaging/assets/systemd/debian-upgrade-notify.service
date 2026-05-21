@@ -1,0 +1,10 @@
+[Unit]
+Description=Debian Upgrade notifier (new major release detection)
+Documentation=https://github.com/Xdavius/debian-upgrade
+After=network-online.target systemd-logind.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/lib/debian-upgrade/check-upgrade-notify.sh
