@@ -113,6 +113,7 @@ notify_for_session() {
         --icon="$APP_ICON" \
         --urgency=critical \
         --expire-time=0 \
+        --wait \
         --action="open=Lancer la mise a niveau" \
         --action="defer_day=Reporter 1 jour" \
         --action="defer_week=Reporter 1 semaine" \
@@ -121,13 +122,21 @@ notify_for_session() {
         "$stable_message" \
       || true
   )"
+  log "session ${session}: action recue='${action:-<none>}' pour ${user}"
 
   case "$action" in
     open)
-      sudo -u "$user" env \
+      log "session ${session}: lancement GUI pour ${user}"
+      if ! sudo -u "$user" env \
         XDG_RUNTIME_DIR="$xdg_runtime_dir" \
         DBUS_SESSION_BUS_ADDRESS="$dbus_bus" \
-        nohup "$GUI_BIN" >/dev/null 2>&1 &
+        systemd-run --user --quiet --collect \
+          --unit "debian-upgrade-gui-launch-${session}" \
+          "$GUI_BIN"; then
+        log "session ${session}: echec lancement GUI via systemd-run --user pour ${user}"
+      else
+        log "session ${session}: lancement GUI via systemd-run --user OK pour ${user}"
+      fi
       ;;
     defer_day)
       "$BACKEND_BIN" defer day >/dev/null 2>&1 || true

@@ -1,6 +1,6 @@
 name="debian-upgrade"
 pkgname="debian-upgrade"
-pkgver="1.1.0"
+pkgver="1.1.1"
 pkgrel="1"
 pkgdesc="Assistant GUI + moteur backend pour mises a niveau majeures Debian"
 arch=("amd64")
@@ -19,9 +19,9 @@ depends=(
 )
 
 makedepends=(
-  'build-essential'
-  'cargo'
-  'rustc'
+  "build-essential"
+  "cargo"
+  "rustc"
 )
 
 source=("git+https://github.com/Xdavius/debian-upgrade.git#branch=dev")

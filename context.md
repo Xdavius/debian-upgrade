@@ -420,3 +420,40 @@ Responsabilités:
     - `upgrade-core/Cargo.toml`
   - bump packaging pacstall: `pkgver=\"1.1.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
   - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Correctif action notification "Lancer la mise a niveau":
+  - Symptome observe en test VM: clic sur l'action `open` sans lancement de la GUI.
+  - Cause probable: absence d'attente explicite de la reponse d'action cote `notify-send`.
+  - Correction script notifier:
+    - ajout de `--wait` sur `notify-send` pour capturer l'action choisie,
+    - ajout de logs `logger` sur l'action recue et le lancement GUI.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Correctif complementaire lancement GUI depuis action notification:
+  - Symptome persistant: action `open` detectee mais GUI non visible.
+  - Cause probable: environnement graphique incomplet lors du lancement (`DISPLAY` / `WAYLAND_DISPLAY` non propages).
+  - Correction: reinjection des variables de session (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`) au moment du `nohup debian-upgrade` execute via `sudo -u`.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Durcissement supplementaire du lancement GUI depuis action `open`:
+  - ajout de la propagation `XAUTHORITY` (utile notamment en sessions X11),
+  - lancement via `sudo -u ... bash -lc "nohup ... &"` pour un detach plus fiable,
+  - ajout d'un log explicite en cas d'echec du lancement (`echec lancement GUI via sudo+bash`).
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Ajustement lancement GUI depuis notification (approche DBus/session user):
+  - simplification demandee: suppression du chemin `xdg-open` et abandon de `nohup`.
+  - chemin unique conserve via DBus/session user: lancement du binaire par `systemd-run --user` (execute depuis `sudo -u` avec environnement de session).
+  - simplification complementaire: alignement strict avec le chemin DBus de l'action notification:
+    - suppression des variables GUI (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`, `XAUTHORITY`) dans le chemin `open`,
+    - conservation du minimum requis DBus/session (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`).
+  - logs distingues:
+    - succes `lancement GUI via systemd-run --user OK`,
+    - echec `echec lancement GUI via systemd-run --user`.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Validation fonctionnelle finale en VM:
+  - le clic sur l'action notification `Lancer la mise a niveau` declenche correctement l'ouverture de la GUI.
+  - le chemin retenu est confirme: `sudo -u` + DBus session user + `systemd-run --user`.
+- Passage version patch:
+  - bump `1.1.0` -> `1.1.1` pour:
+    - `backend-cli/Cargo.toml`
+    - `frontend-gui/Cargo.toml`
+    - `upgrade-core/Cargo.toml`
+  - bump packaging pacstall: `pkgver=\"1.1.1\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
