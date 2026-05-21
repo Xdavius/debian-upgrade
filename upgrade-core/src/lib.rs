@@ -71,6 +71,7 @@ pub struct ReleaseCheckResult {
     pub testing_codename: Option<String>,
 }
 
+// Construit un événement horodaté prêt à être émis côté CLI/GUI.
 fn event(level: LogLevel, step: &'static str, state: StepState, message: impl Into<String>) -> Event {
     Event {
         timestamp: Utc::now().to_rfc3339(),
@@ -81,6 +82,7 @@ fn event(level: LogLevel, step: &'static str, state: StepState, message: impl In
     }
 }
 
+// Emet un log debug uniquement si le mode debug est activé.
 fn emit_debug(ctx: AppContext, step: &'static str, message: impl Into<String>, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     if ctx.debug {
         emit(event(LogLevel::Debug, step, StepState::Pending, message))?;
@@ -88,18 +90,22 @@ fn emit_debug(ctx: AppContext, step: &'static str, message: impl Into<String>, e
     Ok(())
 }
 
+// Simule un court temps de travail pour les étapes non branchées en réel.
 fn simulate_work() {
     thread::sleep(Duration::from_millis(150));
 }
 
+// Préfixe d'environnement pour forcer les commandes APT en non interactif.
 fn noninteractive_env_prefix() -> &'static str {
     "DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none"
 }
 
+// Options APT/Dpkg utilisées pour éviter les prompts bloquants.
 fn apt_noninteractive_opts() -> &'static str {
     "-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true"
 }
 
+// Exécute une étape générique avec logs communs et mode dry-run.
 fn run_step(
     ctx: AppContext,
     step: &'static str,
@@ -134,6 +140,7 @@ fn run_step(
     Ok(())
 }
 
+// Exécute une commande shell en streamant stdout/stderr vers les événements.
 fn run_and_report(
     step: &'static str,
     emit: &mut dyn FnMut(Event) -> Result<()>,
@@ -197,6 +204,7 @@ fn run_and_report(
     }
 }
 
+// Lit /etc/os-release et retourne la version majeure + codename local.
 fn parse_os_release() -> Result<(u32, Option<String>)> {
     let content = fs::read_to_string("/etc/os-release").context("lecture /etc/os-release")?;
     let mut version_id = None;
@@ -225,6 +233,7 @@ fn parse_os_release() -> Result<(u32, Option<String>)> {
     Ok((major, codename))
 }
 
+// Détecte si l'APT local expose la sous-commande modernize-sources.
 fn apt_supports_modernize_sources() -> bool {
     let output = ProcessCommand::new("apt").arg("--help").output();
     let Ok(output) = output else {
@@ -239,6 +248,7 @@ fn apt_supports_modernize_sources() -> bool {
     combined.contains("modernize-sources")
 }
 
+// Réécrit les suites d'un sources.list classique vers le codename cible.
 fn rewrite_sources_list_codename(
     file_path: &str,
     from_codename: &str,
@@ -318,6 +328,7 @@ fn rewrite_sources_list_codename(
     Ok(changed)
 }
 
+// Réécrit les champs Suites d'un fichier debian.sources vers la cible.
 fn rewrite_debian_sources_codename(
     file_path: &str,
     from_codename: &str,
@@ -379,6 +390,7 @@ fn rewrite_debian_sources_codename(
     Ok(changed)
 }
 
+// Sauvegarde sources.list en sources.bak si présent.
 fn backup_sources_list_if_present(dry_run: bool) -> Result<bool> {
     let source = "/etc/apt/sources.list";
     let backup = "/etc/apt/sources.bak";
@@ -393,6 +405,7 @@ fn backup_sources_list_if_present(dry_run: bool) -> Result<bool> {
     Ok(true)
 }
 
+// Récupère version/codename de stable et codename de testing depuis Debian.
 fn fetch_debian_release_info() -> Result<(u32, String, Option<String>)> {
     let stable_release_url = "https://deb.debian.org/debian/dists/stable/Release";
     let stable_body = reqwest::blocking::get(stable_release_url)
@@ -434,6 +447,7 @@ fn fetch_debian_release_info() -> Result<(u32, String, Option<String>)> {
     Ok((stable_major, stable_codename, testing_codename))
 }
 
+// Vérifie en ligne s'il existe une nouvelle majeure Debian disponible.
 pub fn check_new_major_release(
     ctx: AppContext,
     emit: &mut dyn FnMut(Event) -> Result<()>,
@@ -508,6 +522,7 @@ pub fn check_new_major_release(
     })
 }
 
+// Vérifie et normalise les sources APT avec fallback Debian 12/13.
 fn run_check_sources(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let mut planned_actions = vec![
         "Inspecter /etc/apt/sources.list",
@@ -626,6 +641,104 @@ fn run_check_sources(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>)
     Ok(())
 }
 
+// Désactive les dépôts tiers pour sécuriser la montée de version.
+fn disable_list_repo_lines(file_path: &std::path::Path, dry_run: bool) -> Result<usize> {
+    let content = fs::read_to_string(file_path)
+        .with_context(|| format!("lecture {}", file_path.display()))?;
+    let mut changed = 0usize;
+    let mut rewritten = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('#') {
+            rewritten.push(line.to_string());
+            continue;
+        }
+
+        if trimmed.starts_with("deb ") || trimmed == "deb" || trimmed.starts_with("deb-src ") || trimmed == "deb-src" {
+            rewritten.push(format!("# {line}"));
+            changed += 1;
+        } else {
+            rewritten.push(line.to_string());
+        }
+    }
+
+    if changed > 0 && !dry_run {
+        let mut out = rewritten.join("\n");
+        if content.ends_with('\n') {
+            out.push('\n');
+        }
+        fs::write(file_path, out).with_context(|| format!("ecriture {}", file_path.display()))?;
+    }
+
+    Ok(changed)
+}
+
+// Désactive chaque entrée deb822 d'un fichier .sources via "Enabled: no".
+fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result<usize> {
+    let content = fs::read_to_string(file_path)
+        .with_context(|| format!("lecture {}", file_path.display()))?;
+    let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
+    let mut changed = 0usize;
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        while i < lines.len() && lines[i].trim().is_empty() {
+            i += 1;
+        }
+        if i >= lines.len() {
+            break;
+        }
+
+        let stanza_start = i;
+        while i < lines.len() && !lines[i].trim().is_empty() {
+            i += 1;
+        }
+        let stanza_end = i;
+
+        let mut enabled_idx = None::<usize>;
+        let mut enabled_is_no = false;
+        for (idx, line) in lines[stanza_start..stanza_end].iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = trimmed.split_once(':') {
+                if k.trim().eq_ignore_ascii_case("Enabled") {
+                    enabled_idx = Some(stanza_start + idx);
+                    enabled_is_no = v.trim().eq_ignore_ascii_case("no");
+                    break;
+                }
+            }
+        }
+
+        match enabled_idx {
+            Some(idx) => {
+                if !enabled_is_no {
+                    lines[idx] = "Enabled: no".to_string();
+                    changed += 1;
+                }
+            }
+            None => {
+                lines.insert(stanza_end, "Enabled: no".to_string());
+                changed += 1;
+                i += 1;
+            }
+        }
+    }
+
+    if changed > 0 && !dry_run {
+        let mut out = lines.join("\n");
+        if content.ends_with('\n') {
+            out.push('\n');
+        }
+        fs::write(file_path, out).with_context(|| format!("ecriture {}", file_path.display()))?;
+    }
+
+    Ok(changed)
+}
+
+// Désactive les dépôts tiers pour sécuriser la montée de version.
 fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "disable-third-party";
     emit(event(
@@ -649,7 +762,8 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         }
     };
 
-    let mut changed = 0usize;
+    let mut changed_files = 0usize;
+    let mut changed_entries = 0usize;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -664,27 +778,44 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        if ext != "list" && ext != "sources" {
+        if ext != "list" && ext != "lsit" && ext != "sources" {
             continue;
         }
-        let backup = path.with_extension(format!("{ext}.disabled-by-debian-upgrade"));
+
+        let changed_in_file = if ext == "sources" {
+            disable_sources_entries(&path, ctx.dry_run)?
+        } else {
+            disable_list_repo_lines(&path, ctx.dry_run)?
+        };
+
+        if changed_in_file == 0 {
+            continue;
+        }
+
+        changed_files += 1;
+        changed_entries += changed_in_file;
         if ctx.dry_run {
             emit(event(
                 LogLevel::Warn,
                 step,
                 StepState::Pending,
-                format!("Dry-run: desactivation tierce prevue: {} -> {}", path.display(), backup.display()),
+                format!(
+                    "Dry-run: desactivation tierce prevue dans {} ({} entree(s) modifiee(s)).",
+                    path.display(),
+                    changed_in_file
+                ),
             ))?;
-            changed += 1;
         } else {
-            fs::rename(&path, &backup).with_context(|| format!("rename {} -> {}", path.display(), backup.display()))?;
             emit(event(
                 LogLevel::Info,
                 step,
                 StepState::Pending,
-                format!("Depot tiers desactive: {} -> {}", path.display(), backup.display()),
+                format!(
+                    "Depot tiers desactive dans {} ({} entree(s) modifiee(s)).",
+                    path.display(),
+                    changed_in_file
+                ),
             ))?;
-            changed += 1;
         }
     }
 
@@ -693,18 +824,25 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
             LogLevel::Warn,
             step,
             StepState::Done,
-            format!("Mode dry-run: {} depot(s) tiers seraient desactives.", changed),
+            format!(
+                "Mode dry-run: {} fichier(s) tiers seraient modifies ({} entree(s) desactivee(s)).",
+                changed_files, changed_entries
+            ),
         ))
     } else {
         emit(event(
             LogLevel::Success,
             step,
             StepState::Done,
-            format!("{} depot(s) tiers desactives.", changed),
+            format!(
+                "{} fichier(s) tiers modifies ({} entree(s) desactivee(s)).",
+                changed_files, changed_entries
+            ),
         ))
     }
 }
 
+// Prépare les paquets nécessaires (clean, update, download-only dist-upgrade).
 fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "prepare-packages";
     let env_prefix = noninteractive_env_prefix();
@@ -778,6 +916,7 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
     ))
 }
 
+// Lance un test apt-get -s dist-upgrade en mode non interactif.
 fn run_dry_run_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "dry-run-upgrade";
     emit(event(
@@ -829,6 +968,7 @@ fn run_dry_run_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()
     ))
 }
 
+// Prépare l'intention d'upgrade hors-ligne et journalise la commande cible.
 fn run_schedule_offline_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "schedule-offline-upgrade";
     let env_prefix = noninteractive_env_prefix();
@@ -869,6 +1009,7 @@ fn run_schedule_offline_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> 
     Ok(())
 }
 
+// Journalise la demande de report de notification selon la période choisie.
 fn run_defer(ctx: AppContext, period: DeferPeriod, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let message = match period {
         DeferPeriod::Day => "Notification reportée de 1 jour.",
@@ -890,6 +1031,7 @@ fn run_defer(ctx: AppContext, period: DeferPeriod, emit: &mut dyn FnMut(Event) -
     }
 }
 
+// Exécute le pipeline complet de préparation de l'upgrade majeure.
 fn run_all(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     emit(event(
         LogLevel::Info,
@@ -929,6 +1071,7 @@ fn run_all(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result
     ))
 }
 
+// Emet les métadonnées de contexte en début d'exécution.
 pub fn emit_bootstrap(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     emit_debug(
         ctx,
@@ -938,6 +1081,7 @@ pub fn emit_bootstrap(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>
     )
 }
 
+// Route une commande métier vers son exécuteur concret.
 pub fn run_command(ctx: AppContext, command: Command, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     match command {
         Command::CheckNewRelease => {
@@ -959,6 +1103,7 @@ mod tests {
     use super::*;
 
     #[test]
+    // Vérifie que chaque valeur de report produit bien des événements exploitables.
     fn defer_periods_are_supported() {
         let ctx = AppContext {
             dry_run: true,

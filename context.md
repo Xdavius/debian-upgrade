@@ -303,3 +303,37 @@ Responsabilités:
     - si `debian.sources` est absent, fallback sur migration de `/etc/apt/sources.list`.
     - la migration des suites couvre aussi les alias (`stable`, `oldstable`, `stable-updates`, `oldstable-updates`, `stable-security`, `oldstable-security`) vers le codename cible explicite.
   - En `dry-run`, ces operations sont simulees et journalisees; en mode reel, elles sont appliquees.
+
+### 2026-05-21
+
+- Relecture complete de `context.md` en debut de session pour reprise de contexte projet.
+- Confirmation explicite des axes actifs (GUI principale, backend moteur, workflow offline, fallback privilege, packaging, suivi continu).
+- Rappel utilisateur integre: journaliser systematiquement les evolutions de session directement dans `context.md`.
+- Ajout de commentaires explicatifs rapides au-dessus de chaque fonction Rust dans:
+  - `backend-cli/src/main.rs`
+  - `frontend-gui/build.rs`
+  - `frontend-gui/src/main.rs`
+  - `upgrade-core/src/lib.rs` (y compris fonctions publiques et test unitaire local).
+- Verification post-modification: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Refonte de la desactivation des depots tiers (sans renommage de fichiers) dans `upgrade-core`:
+  - Fichiers `.list` (et tolerance `.lsit`): les lignes actives commencant par `deb` ou `deb-src` sont commentees.
+  - Fichiers `.sources` (deb822): chaque entree de depot est forcee en `Enabled: no`;
+    - si `Enabled` existe deja: valeur remplacee par `no`,
+    - si `Enabled` est absente: ligne `Enabled: no` ajoutee pour l'entree.
+  - Support explicite des fichiers avec plusieurs depots (plusieurs stanzas) dans un meme `.sources`.
+  - Le mode `dry-run` journalise les modifications sans ecriture disque.
+- Validation post-refonte: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- GUI page depots tiers rendue dynamique et scrollable:
+  - Remplacement des 3 cases statiques par un modele Slint `third_party_repos` (liste de longueur variable).
+  - Affichage via `ScrollView` + repetition de `CheckBox`, permettant la selection quel que soit le nombre de depots (1, 10, ou plus).
+  - Ajout d'un callback UI `set_third_party_enabled` pour synchroniser l'etat coche/decoché dans le modele.
+  - Adaptation Rust (`frontend-gui/src/main.rs`):
+    - initialisation du `VecModel<ThirdPartyRepo>` depuis la detection systeme,
+    - lecture des depots re-actives depuis le modele dynamique (plus de limite a 3).
+  - Correctif syntaxe Slint associe: signature callback et texte page 1 rendu valide.
+- Validation post-modification UI: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement UX logs page 1/page 2:
+  - Le message de detection des depots tiers ("aucun depot" / nombre detecte) n'est plus affiche au demarrage page 1.
+  - Le message est maintenant emis lors du passage effectif vers la page 2 apres clic `Suivant` (verification release OK, ou bypass debug).
+  - Correction associee: texte multi-ligne page 1 rendu avec `\\n` valide Slint (suppression du literal invalide).
+- Validation post-correctif: `cargo check -p frontend-gui` OK.

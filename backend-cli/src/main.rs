@@ -43,6 +43,7 @@ enum DeferPeriod {
 }
 
 impl From<DeferPeriod> for CoreDeferPeriod {
+    // Convertit la période CLI vers le type partagé du coeur backend.
     fn from(value: DeferPeriod) -> Self {
         match value {
             DeferPeriod::Day => Self::Day,
@@ -52,12 +53,14 @@ impl From<DeferPeriod> for CoreDeferPeriod {
     }
 }
 
+// Emet un événement JSON ligne par ligne sur stdout pour la GUI.
 fn emit_json_stdout(event: Event) -> Result<()> {
     println!("{}", serde_json::to_string(&event)?);
     std::io::stdout().flush()?;
     Ok(())
 }
 
+// Point d'entrée CLI: parse les options et délègue l'exécution à upgrade-core.
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter("info")
