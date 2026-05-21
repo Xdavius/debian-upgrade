@@ -77,13 +77,12 @@ notify_for_session() {
   local session="$1"
   local stable_message="$2"
 
-  local user uid active state remote type leader
+  local user uid active state remote leader
   user="$(get_session_prop "$session" Name)"
   uid="$(get_session_prop "$session" User)"
   active="$(get_session_prop "$session" Active)"
   state="$(get_session_prop "$session" State)"
   remote="$(get_session_prop "$session" Remote)"
-  type="$(get_session_prop "$session" Type)"
   leader="$(get_session_prop "$session" Leader)"
 
   [ -n "$user" ] || return 0
@@ -91,7 +90,6 @@ notify_for_session() {
   [ "$active" = "yes" ] || return 0
   [ "$state" = "active" ] || return 0
   [ "$remote" = "no" ] || return 0
-  [ "$type" = "x11" ] || [ "$type" = "wayland" ] || return 0
   is_sudo_or_root_user "$user" || return 0
   should_skip_due_to_defer "$uid" && return 0
 

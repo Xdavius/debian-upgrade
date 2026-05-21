@@ -203,7 +203,7 @@ Responsabilités:
   - Redemarrage systeme declenche apres armement.
 - Mode debug conserve en simulation (pas d'action systeme destructive).
 - Demarrage du chantier packaging:
-  - Ajout d'un `pacscript` initial: `packaging/pacstall/debian-upgrade-deb.pacscript`.
+  - Ajout d'un `pacscript` initial: `packaging/pacstall/debian-upgrade.pacscript`.
   - Le package installe la GUI (`/usr/bin/debian-upgrade`) et le backend (`/usr/libexec/debian-upgrade-backend`).
   - Les fichiers systeme lies a l'upgrade hors-ligne sont packages explicitement (`/usr/local/lib/debian-upgrade/offline-upgrade.sh` et `/usr/lib/systemd/system/debian-upgrade-offline.service`) pour garantir leur suppression a la desinstallation.
   - Ajout d'un launcher desktop (`/usr/share/applications/debian-upgrade.desktop`).
@@ -396,3 +396,12 @@ Responsabilités:
   - `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
   - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
 - Hygiene depot: ajout de `*.deb` dans `.gitignore` pour eviter le suivi des artefacts de packaging.
+- Ajustement timer notification post-test utilisateur:
+  - `debian-upgrade-notify.timer` modifie pour un premier passage plus rapide apres boot.
+  - `OnBootSec` passe de `15min` a `5min`.
+  - `RandomizedDelaySec` passe de `30min` a `0` pour garantir un delai maximal de 5 minutes.
+- Correctif notifier suite test VM:
+  - Cas observe: session utilisateur remontee par `loginctl` en `tty1` (ex: `Type=tty`), notification absente malgre daemon notif fonctionnel.
+  - Cause: filtre trop strict du script sur `Type=x11|wayland`.
+  - Correction: suppression du filtre `Type` dans `check-upgrade-notify.sh`; la detection de capacite graphique repose desormais sur la presence effective de `DISPLAY` ou `WAYLAND_DISPLAY` dans l'environnement du leader de session.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
