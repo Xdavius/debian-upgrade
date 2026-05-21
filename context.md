@@ -556,3 +556,37 @@ Responsabilités:
     - `upgrade-core/Cargo.toml`
   - bump packaging pacstall: `pkgver=\"1.3.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
   - validation post-bump: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Bascule "tout pkcon" sur le pipeline principal:
+  - `upgrade-core` migre de `apt-get` vers PackageKit pour les etapes:
+    - `prepare-packages`: `pkcon -y refresh force` puis `pkcon -y update --only-download`.
+    - `dry-run-upgrade`: verification via `pkcon get-updates`.
+    - `schedule-offline-upgrade`: message cible aligne sur `pkcon offline-trigger && systemctl reboot`.
+  - `frontend-gui` aligne les messages/debugs restants:
+    - remplacement des references `apt-get` par `pkcon` dans les logs d'etape et la detection d'erreur associee.
+  - `packaging/assets/bin/offline-upgrade.sh` aligne aussi l'execution offline fallback sur `pkcon`.
+  - objectif: eviter le flux mixte apt/pkcon et standardiser le comportement autour de PackageKit.
+  - validation: `cargo check` (workspace) OK.
+- Durcissement non interactif PackageKit:
+  - ajout de `--noninteractive` sur tous les appels `pkcon` actifs (core, agent backend, script offline fallback).
+  - chemins concernes:
+    - preparation paquets (`refresh`, `update --only-download`),
+    - verification pre-upgrade (`get-updates`),
+    - trigger offline (`offline-trigger`),
+    - execution offline fallback (`update`).
+  - objectif: eviter tout prompt interactif inattendu dans les chemins root/systemd.
+  - validation: `cargo check` OK.
+- Ajustement demande utilisateur: le script offline fallback repasse en `apt-get` non interactif.
+  - fichier: `packaging/assets/bin/offline-upgrade.sh`
+  - commandes restorees:
+    - `apt-get update`
+    - `apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade`
+  - le reste du pipeline principal reste base sur `pkcon`.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Passage release en `1.3.1` pour phase de tests:
+  - bump version crates:
+    - `backend-cli/Cargo.toml` -> `1.3.1`
+    - `frontend-gui/Cargo.toml` -> `1.3.1`
+    - `upgrade-core/Cargo.toml` -> `1.3.1`
+  - bump packaging pacstall:
+    - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="1.3.1"`
+  - validation post-bump: `cargo check` OK.

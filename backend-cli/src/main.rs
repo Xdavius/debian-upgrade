@@ -90,9 +90,9 @@ if command -v pkcon >/dev/null 2>&1 && [ -f /usr/lib/systemd/system/packagekit-o
     /usr/lib/systemd/system/system-update.target.wants/packagekit-offline-update.service
 
   # Prepare updates for offline transaction, then trigger native offline mode.
-  pkcon -y refresh force || true
-  pkcon -y update --only-download
-  pkcon offline-trigger
+  pkcon -y --noninteractive refresh force || true
+  pkcon -y --noninteractive update --only-download
+  pkcon --noninteractive offline-trigger
   systemctl reboot
   exit 0
 fi

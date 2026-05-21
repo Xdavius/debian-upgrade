@@ -1,6 +1,6 @@
 name="debian-upgrade"
 pkgname="debian-upgrade"
-pkgver="1.3.0"
+pkgver="1.3.1"
 pkgrel="1"
 pkgdesc="Assistant GUI + moteur backend pour mises a niveau majeures Debian"
 arch=("amd64")

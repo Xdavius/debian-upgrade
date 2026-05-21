@@ -887,7 +887,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             Err(err) => {
                                 let is_permission = format!("{err}").contains("Permission denied")
                                     || format!("{err}").contains("permission denied")
-                                    || format!("{err}").contains("apt-get");
+                                    || format!("{err}").contains("pkcon");
                                 if is_permission && !mode.debug {
                                     append_log(&app, "[warn] Permissions insuffisantes detectees, tentative avec elevation privilegiee...");
                                     app.set_header_status("Elevation privilegiee...".into());
@@ -951,7 +951,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     if let Some(app) = ui.upgrade() {
                         app.set_header_status("Test dry-run upgrade en cours".into());
                         append_log(&app, "[info] Simulation du test de mise a niveau...");
-                        append_log(&app, "[debug] Commande cible future: apt-get -s dist-upgrade");
+                        append_log(&app, "[debug] Commande cible future: pkcon get-updates");
                     }
                 }
             });
@@ -986,7 +986,7 @@ fn main() -> Result<(), slint::PlatformError> {
                             Err(err) => {
                                 let is_permission = format!("{err}").contains("Permission denied")
                                     || format!("{err}").contains("permission denied")
-                                    || format!("{err}").contains("apt-get");
+                                    || format!("{err}").contains("pkcon");
                                 if is_permission && !mode.debug {
                                     append_log(&app, "[warn] Permissions insuffisantes detectees, tentative avec elevation privilegiee...");
                                     app.set_header_status("Elevation privilegiee...".into());
