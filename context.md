@@ -464,3 +464,70 @@ Responsabilités:
     - armement du mode offline (sans reboot),
     - verification finale des liens `/system-update` et `system-update.target.wants`.
   - script rendu executable et valide (`bash -n` OK).
+  - correctif shell: bloc d'armement privilegie passe de `pkexec /bin/sh -c` a `pkexec /bin/bash -c` pour coherer avec `set -euo pipefail`.
+- Correctif GUI page 5 (armement/reboot):
+  - remplacement du shell privilegie dans `frontend-gui`:
+    - `pkexec /bin/sh -c` -> `pkexec /bin/bash -c`
+    - fallback `sudo -S /bin/sh -c` -> `sudo -S /bin/bash -c`
+  - objectif: eviter l'echec `set -euo pipefail` sous `dash` (`/bin/sh`) et supprimer l'erreur `Erreur armer/reboot` observee en test.
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Base config/session applicative ajoutee cote GUI:
+  - creation/lecture d'un fichier JSON utilisateur `~/.config/debian-upgrade/session.json` (ou `XDG_CONFIG_HOME`),
+  - structure initiale: `debug_mode` + `selected_third_party_repos`,
+  - pre-remplissage des cases depots tiers depuis la session precedente,
+  - sauvegarde automatique des choix depots tiers a la validation des sources (page 2).
+  - objectif: poser la base technique pour un futur setup global (reduction des prompts privilege).
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Premier pas vers "1 prompt max" en mode normal:
+  - refonte du chemin privilegie backend GUI pour executer plusieurs sous-commandes dans une seule elevation (`pkexec`), via une seule commande `bash -lc` chainee.
+  - en cas de permissions insuffisantes detectees page 2, le fallback privilegie enchaine maintenant en une seule session:
+    - `check-sources`
+    - `disable-third-party`
+    - `prepare-packages`
+    - `dry-run-upgrade`
+  - sur succes, la GUI passe directement en page 5 avec statut `Dry-run valide`.
+  - objectif: reduire fortement les redemandes mot de passe sur le parcours normal.
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Iteration suivante: chemin "single prompt" rendu explicite en mode normal (pas seulement fallback):
+  - callback page 2 (`validate_sources`) refactore:
+    - mode normal: elevation privilegiee explicite mais limitee a `check-sources` + `disable-third-party`,
+    - mode debug: conservation du parcours local dry-run historique (progression page 2 -> 3).
+  - retour au flux UX page-par-page demande:
+    - page 2 valide les sources,
+    - page 3 declenche `prepare-packages`,
+    - page 4 declenche `dry-run-upgrade`,
+    - page 5 finalise.
+  - suppression du chainage complet page 2 -> page 5 (non souhaite car court-circuitait la validation utilisateur des depots).
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- MVP agent privilegie (backend) + adaptation debug:
+  - `backend-cli` etendu avec une sous-commande `agent`:
+    - boucle stdin (`check-sources`, `disable-third-party`, `prepare-packages`, `dry-run-upgrade`, `run-all`, `defer ...`, `quit`),
+    - emission continue des evenements JSON comme les autres commandes.
+  - GUI page 2 (mode normal) branchee sur l'agent privilegie:
+    - lancement unique `pkexec debian-upgrade-backend agent`,
+    - envoi sequence des sous-commandes via stdin,
+    - lecture stream des evenements backend via stdout.
+  - ordre d'elevation/secret aligne selon demande:
+    - tentative prioritaire `pkexec`,
+    - fallback `sudo -S` avec saisie mot de passe `zenity` puis fallback `kdialog`.
+  - ajout helper mot de passe `read_password_from_zenity_or_kdialog()`.
+  - nettoyage: suppression de fonctions streaming privilegiees devenues inutilisees.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Agent privilegie rendu persistant entre pages:
+  - ajout d'une session agent cote GUI (`OnceLock<Mutex<Option<PrivilegedAgentSession>>>`) conservee et reutilisee.
+  - protocole de fin de commande ajoute:
+    - marqueur `__AGENT_DONE__|ok|<cmd>` ou `__AGENT_DONE__|err|<cmd>` emis par `backend-cli agent`.
+  - la GUI envoie les commandes une a une a l'agent et attend le marqueur correspondant avant de poursuivre.
+  - la page 5 utilise desormais l'agent via la commande `arm-and-reboot` (plus de chemin shell privilegie separe).
+  - objectif: eviter les re-prompts entre pages 2/3/4/5 et garder une elevation unique.
+- Nettoyage decisionnel:
+  - suppression conservee de `buildtest/test-offline-arm.sh` (outil devenu inutile apres identification de la cause `/bin/sh` vs `/bin/bash`).
+- Validation finale iteration:
+  - `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Correctif securite/logs suite test mot de passe errone:
+  - suppression du echo de commande brute dans les erreurs agent (`backend-cli`) pour eviter toute fuite potentielle de contenu sensible.
+  - durcissement fallback `sudo` cote GUI:
+    - validation mot de passe isolee via `sudo -S -v`,
+    - lancement de l'agent fallback sans reutiliser le mot de passe sur le meme stdin que les commandes agent.
+  - objectif: eviter que des entrees sensibles puissent se retrouver melangees au flux de commandes/logs en cas d'authentification incorrecte.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
