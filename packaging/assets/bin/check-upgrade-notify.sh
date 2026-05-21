@@ -93,15 +93,11 @@ notify_for_session() {
   is_sudo_or_root_user "$user" || return 0
   should_skip_due_to_defer "$uid" && return 0
 
-  local xdg_runtime_dir dbus_bus display wayland_display xdg_session_type xauthority
+  local xdg_runtime_dir dbus_bus
   xdg_runtime_dir="$(read_env_from_leader "$leader" XDG_RUNTIME_DIR)"
   [ -n "$xdg_runtime_dir" ] || xdg_runtime_dir="/run/user/${uid}"
   dbus_bus="$(read_env_from_leader "$leader" DBUS_SESSION_BUS_ADDRESS)"
   [ -n "$dbus_bus" ] || dbus_bus="unix:path=${xdg_runtime_dir}/bus"
-  display="$(read_env_from_leader "$leader" DISPLAY)"
-  wayland_display="$(read_env_from_leader "$leader" WAYLAND_DISPLAY)"
-  xdg_session_type="$(read_env_from_leader "$leader" XDG_SESSION_TYPE)"
-  xauthority="$(read_env_from_leader "$leader" XAUTHORITY)"
   if [ ! -S "${xdg_runtime_dir}/bus" ]; then
     log "session ${session}: bus DBus absent pour ${user} (${xdg_runtime_dir}/bus)"
     return 0
@@ -134,12 +130,12 @@ notify_for_session() {
       if ! sudo -u "$user" env \
         XDG_RUNTIME_DIR="$xdg_runtime_dir" \
         DBUS_SESSION_BUS_ADDRESS="$dbus_bus" \
-        DISPLAY="${display:-}" \
-        WAYLAND_DISPLAY="${wayland_display:-}" \
-        XDG_SESSION_TYPE="${xdg_session_type:-}" \
-        XAUTHORITY="${xauthority:-}" \
-        bash -lc "nohup '$GUI_BIN' >/dev/null 2>&1 </dev/null &"; then
-        log "session ${session}: echec lancement GUI via sudo+bash pour ${user}"
+        systemd-run --user --quiet --collect \
+          --unit "debian-upgrade-gui-launch-${session}" \
+          "$GUI_BIN"; then
+        log "session ${session}: echec lancement GUI via systemd-run --user pour ${user}"
+      else
+        log "session ${session}: lancement GUI via systemd-run --user OK pour ${user}"
       fi
       ;;
     defer_day)

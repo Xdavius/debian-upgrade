@@ -437,3 +437,13 @@ Responsabilités:
   - lancement via `sudo -u ... bash -lc "nohup ... &"` pour un detach plus fiable,
   - ajout d'un log explicite en cas d'echec du lancement (`echec lancement GUI via sudo+bash`).
   - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Ajustement lancement GUI depuis notification (approche DBus/session user):
+  - simplification demandee: suppression du chemin `xdg-open` et abandon de `nohup`.
+  - chemin unique conserve via DBus/session user: lancement du binaire par `systemd-run --user` (execute depuis `sudo -u` avec environnement de session).
+  - simplification complementaire: alignement strict avec le chemin DBus de l'action notification:
+    - suppression des variables GUI (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`, `XAUTHORITY`) dans le chemin `open`,
+    - conservation du minimum requis DBus/session (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`).
+  - logs distingues:
+    - succes `lancement GUI via systemd-run --user OK`,
+    - echec `echec lancement GUI via systemd-run --user`.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
