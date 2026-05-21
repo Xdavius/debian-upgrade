@@ -432,3 +432,8 @@ Responsabilités:
   - Cause probable: environnement graphique incomplet lors du lancement (`DISPLAY` / `WAYLAND_DISPLAY` non propages).
   - Correction: reinjection des variables de session (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`) au moment du `nohup debian-upgrade` execute via `sudo -u`.
   - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Durcissement supplementaire du lancement GUI depuis action `open`:
+  - ajout de la propagation `XAUTHORITY` (utile notamment en sessions X11),
+  - lancement via `sudo -u ... bash -lc "nohup ... &"` pour un detach plus fiable,
+  - ajout d'un log explicite en cas d'echec du lancement (`echec lancement GUI via sudo+bash`).
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
