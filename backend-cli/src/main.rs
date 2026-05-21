@@ -83,19 +83,33 @@ fn parse_agent_command(line: &str) -> Option<CoreCommand> {
 fn run_agent_arm_and_reboot() -> Result<()> {
     let script = r#"set -euo pipefail
 
+# Prefer native PackageKit offline update path (desktop-integrated progress screen).
+if command -v pkcon >/dev/null 2>&1 && [ -f /usr/lib/systemd/system/packagekit-offline-update.service ]; then
+  install -d -m 0755 /usr/lib/systemd/system/system-update.target.wants
+  ln -snf ../packagekit-offline-update.service \
+    /usr/lib/systemd/system/system-update.target.wants/packagekit-offline-update.service
+
+  # Prepare updates for offline transaction, then trigger native offline mode.
+  pkcon -y refresh force || true
+  pkcon -y update --only-download
+  pkcon offline-trigger
+  systemctl reboot
+  exit 0
+fi
+
+# Fallback: custom offline service path.
 if [ ! -x /usr/local/lib/debian-upgrade/offline-upgrade.sh ]; then
   echo "Script manquant: /usr/local/lib/debian-upgrade/offline-upgrade.sh"
   exit 1
 fi
-
 if [ ! -f /usr/lib/systemd/system/debian-upgrade-offline.service ]; then
   echo "Service manquant: /usr/lib/systemd/system/debian-upgrade-offline.service"
   exit 1
 fi
-
 install -d -m 0755 /var/lib/system-update
 install -d -m 0755 /etc/systemd/system/system-update.target.wants
-ln -snf /usr/lib/systemd/system/debian-upgrade-offline.service /etc/systemd/system/system-update.target.wants/debian-upgrade-offline.service
+ln -snf /usr/lib/systemd/system/debian-upgrade-offline.service \
+  /etc/systemd/system/system-update.target.wants/debian-upgrade-offline.service
 ln -snf /var/lib/system-update /system-update
 systemctl daemon-reload
 systemctl reboot

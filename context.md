@@ -539,3 +539,20 @@ Responsabilités:
   - ajout `TimeoutStartSec=infinity` pour eviter un timeout systemd pendant un `apt-get dist-upgrade` long.
   - objectif: terminer proprement le cycle `system-update.target` et eviter les reboots "crash/race" pendant l'offline upgrade.
   - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Tentative de migration vers le mecanisme offline natif (ecran de progression desktop):
+  - `arm-and-reboot` (agent backend) adapte pour preferer le chemin PackageKit:
+    - detection `pkcon` + `packagekit-offline-update.service`,
+    - preparation transaction offline (`pkcon -y update --only-download`),
+    - declenchement offline natif (`pkcon offline-trigger`) puis reboot.
+  - fallback conserve vers le chemin offline custom existant si PackageKit n'est pas disponible.
+  - packaging mis a jour avec dependances:
+    - `packagekit`
+    - `packagekit-tools`
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Passage release:
+  - bump version projet vers `1.3.0`:
+    - `backend-cli/Cargo.toml`
+    - `frontend-gui/Cargo.toml`
+    - `upgrade-core/Cargo.toml`
+  - bump packaging pacstall: `pkgver=\"1.3.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - validation post-bump: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
