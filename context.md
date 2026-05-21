@@ -337,3 +337,57 @@ Responsabilités:
   - Le message est maintenant emis lors du passage effectif vers la page 2 apres clic `Suivant` (verification release OK, ou bypass debug).
   - Correction associee: texte multi-ligne page 1 rendu avec `\\n` valide Slint (suppression du literal invalide).
 - Validation post-correctif: `cargo check -p frontend-gui` OK.
+- Demarrage du service de detection de nouvelle majeure (notification utilisateur):
+  - Ajout du script `packaging/assets/bin/check-upgrade-notify.sh`:
+    - verifie session graphique, connectivite internet et presence des outils,
+    - lance `debian-upgrade-backend check-new-release`,
+    - detecte une nouvelle majeure via les evenements JSON backend,
+    - envoie une notification via `notify-send` avec:
+      - nom application: `Debian-Upgrade`
+      - icone: `system-software-update`
+    - propose ensuite une action utilisateur via liste deroulante (`zenity`):
+      - lancer la GUI `debian-upgrade`,
+      - reporter de 1 jour / 1 semaine / 1 mois.
+    - persiste le report local utilisateur dans `${XDG_STATE_HOME:-~/.local/state}/debian-upgrade/next-notify-epoch`.
+  - Ajout des unites `systemd --user`:
+    - `packaging/assets/systemd/user/debian-upgrade-notify.service`
+    - `packaging/assets/systemd/user/debian-upgrade-notify.timer`
+    - timer configure (`OnBootSec=15min`, `OnUnitActiveSec=1d`, `RandomizedDelaySec=30min`, `Persistent=true`).
+  - Packaging pacstall mis a jour:
+    - installation du script notifier + unites user systemd,
+    - activation vendor du timer via lien `timers.target.wants`,
+    - nouvelles dependances runtime: `libnotify-bin`, `zenity`.
+  - README enrichi avec une section "Notification automatique (service utilisateur)".
+- Validation:
+  - `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Refonte demandee du mecanisme de notification (suppression zenity, mode root multi-utilisateurs):
+  - Le notifier est maintenant pense pour un service `systemd` system-wide execute en root (plus `systemd --user`).
+  - Le script `check-upgrade-notify.sh` a ete remanie pour:
+    - verifier internet puis appeler `debian-upgrade-backend check-new-release`,
+    - cibler les sessions graphiques actives via `loginctl`,
+    - notifier plusieurs utilisateurs eligibles:
+      - `root`,
+      - membres du groupe `sudo`,
+    - envoyer une notification interactive `notify-send` avec actions directes:
+      - `open` (lancer la GUI),
+      - `defer_day`, `defer_week`, `defer_month`.
+  - Parametrage notification conforme demande:
+    - app name: `Debian-Upgrade`,
+    - icon: `system-software-update`,
+    - urgence `critical`,
+    - expiration `0` (notification persistante jusqu'a action selon le daemon).
+  - Le report est memorise par utilisateur (uid) dans `/var/lib/debian-upgrade/notify/`.
+- Unites systemd mises a jour:
+  - suppression des unites `packaging/assets/systemd/user/debian-upgrade-notify.{service,timer}`,
+  - ajout des unites system:
+    - `packaging/assets/systemd/debian-upgrade-notify.service`
+    - `packaging/assets/systemd/debian-upgrade-notify.timer`
+  - packaging pacstall adapte (installation dans `/usr/lib/systemd/system/` + symlink `timers.target.wants`).
+- Packaging/Docs:
+  - dependance `zenity` retiree du package,
+  - README mis a jour (service root, actions dans la notification, suppression popup zenity).
+  - Pacscript: ajout d'un hook `post_install()` qui execute `systemctl daemon-reload` puis `systemctl enable --now debian-upgrade-notify.timer` (mode tolerant avec `|| true`).
+- Validation post-refonte:
+  - `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.

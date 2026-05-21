@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic Debian Upgrade major release check
+Documentation=https://github.com/Xdavius/debian-upgrade
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+RandomizedDelaySec=30min
+Persistent=true
+Unit=debian-upgrade-notify.service
+
+[Install]
+WantedBy=timers.target
