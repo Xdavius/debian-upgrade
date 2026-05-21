@@ -447,3 +447,13 @@ Responsabilités:
     - succes `lancement GUI via systemd-run --user OK`,
     - echec `echec lancement GUI via systemd-run --user`.
   - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Validation fonctionnelle finale en VM:
+  - le clic sur l'action notification `Lancer la mise a niveau` declenche correctement l'ouverture de la GUI.
+  - le chemin retenu est confirme: `sudo -u` + DBus session user + `systemd-run --user`.
+- Passage version patch:
+  - bump `1.1.0` -> `1.1.1` pour:
+    - `backend-cli/Cargo.toml`
+    - `frontend-gui/Cargo.toml`
+    - `upgrade-core/Cargo.toml`
+  - bump packaging pacstall: `pkgver=\"1.1.1\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
