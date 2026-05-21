@@ -457,3 +457,10 @@ Responsabilités:
     - `upgrade-core/Cargo.toml`
   - bump packaging pacstall: `pkgver=\"1.1.1\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
   - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Support test VM offline-upgrade:
+  - ajout d'un script utilitaire `buildtest/test-offline-arm.sh` pour tester sans copier/coller:
+    - validation `pkexec`,
+    - verification presence script/service offline packages,
+    - armement du mode offline (sans reboot),
+    - verification finale des liens `/system-update` et `system-update.target.wants`.
+  - script rendu executable et valide (`bash -n` OK).
