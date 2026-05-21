@@ -19,9 +19,9 @@ depends=(
 )
 
 makedepends=(
-  'build-essential'
-  'cargo'
-  'rustc'
+  "build-essential"
+  "cargo>=1.85.0"
+  "rustc>=1.85.0"
 )
 
 source=("git+https://github.com/Xdavius/debian-upgrade.git#branch=dev")

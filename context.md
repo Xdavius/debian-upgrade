@@ -427,3 +427,8 @@ Responsabilités:
     - ajout de `--wait` sur `notify-send` pour capturer l'action choisie,
     - ajout de logs `logger` sur l'action recue et le lancement GUI.
   - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
+- Correctif complementaire lancement GUI depuis action notification:
+  - Symptome persistant: action `open` detectee mais GUI non visible.
+  - Cause probable: environnement graphique incomplet lors du lancement (`DISPLAY` / `WAYLAND_DISPLAY` non propages).
+  - Correction: reinjection des variables de session (`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_SESSION_TYPE`) au moment du `nohup debian-upgrade` execute via `sudo -u`.
+  - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
