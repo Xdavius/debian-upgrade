@@ -82,33 +82,6 @@ fn parse_agent_command(line: &str) -> Option<CoreCommand> {
 // Exécute l'armement offline + reboot directement depuis le contexte root agent.
 fn run_agent_arm_and_reboot() -> Result<()> {
     let script = r#"set -euo pipefail
-
-# Prefer native PackageKit offline update path (desktop-integrated progress screen).
-if command -v pkcon >/dev/null 2>&1 && systemctl cat packagekit-offline-update.service >/dev/null 2>&1; then
-  PK_UNIT_PATH="$(systemctl show -p FragmentPath --value packagekit-offline-update.service || true)"
-  if [ -z "${PK_UNIT_PATH}" ] || [ ! -f "${PK_UNIT_PATH}" ]; then
-    PK_UNIT_PATH="/usr/lib/systemd/system/packagekit-offline-update.service"
-  fi
-  if [ ! -f "${PK_UNIT_PATH}" ]; then
-    PK_UNIT_PATH="/lib/systemd/system/packagekit-offline-update.service"
-  fi
-  if [ ! -f "${PK_UNIT_PATH}" ]; then
-    echo "Service PackageKit offline introuvable sur disque."
-    exit 1
-  fi
-  install -d -m 0755 /etc/systemd/system/system-update.target.wants
-  ln -snf "${PK_UNIT_PATH}" \
-    /etc/systemd/system/system-update.target.wants/packagekit-offline-update.service
-
-  # Prepare updates for offline transaction, then trigger native offline mode.
-  pkcon -y --noninteractive refresh force || true
-  pkcon -y --noninteractive update --only-download
-  pkcon --noninteractive offline-trigger
-  systemctl reboot
-  exit 0
-fi
-
-# Fallback: custom offline service path.
 if [ ! -x /usr/local/lib/debian-upgrade/offline-upgrade.sh ]; then
   echo "Script manquant: /usr/local/lib/debian-upgrade/offline-upgrade.sh"
   exit 1

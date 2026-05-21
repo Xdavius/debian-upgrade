@@ -598,3 +598,45 @@ Responsabilités:
   - armement dans `/etc/systemd/system/system-update.target.wants/` avec lien vers le chemin resolu.
   - objectif: declencher le chemin natif meme si l'unite n'est pas au chemin hardcode precedent.
   - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Preparation paquets durcie: ajout d'un nettoyage explicite du cache APT avant le flux PackageKit.
+  - fichier: `upgrade-core/src/lib.rs` (`run_prepare_packages`).
+  - sequence: `apt-get clean` puis `pkcon -y --noninteractive refresh force` puis `pkcon -y --noninteractive update --only-download`.
+  - objectif: repartir d'un cache propre pour limiter les comportements parasites.
+  - validation: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Reorientation complete vers APT (abandon du chemin PackageKit/pkcon pour la montee majeure):
+  - `upgrade-core` repasse full APT:
+    - `prepare-packages`: `apt-get clean`, `apt-get update`, `apt-get --download-only dist-upgrade` (non interactif + options dpkg).
+    - `dry-run-upgrade`: `apt-get -s dist-upgrade` (non interactif + options dpkg).
+    - `schedule-offline-upgrade`: message cible aligne sur commande APT non interactive.
+  - `backend-cli` (`arm-and-reboot`) simplifie:
+    - suppression de la branche native PackageKit.
+    - armement direct du service offline custom `debian-upgrade-offline.service` + marker `/system-update`, puis reboot.
+  - `frontend-gui` alignee sur APT:
+    - logs debug dry-run reviennent a `apt-get -s dist-upgrade`.
+    - detection d'erreur permission alignee sur `apt-get` (au lieu de `pkcon`).
+  - `pacscript` nettoye:
+    - suppression des dependances `packagekit` et `packagekit-tools`.
+  - validation:
+    - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+    - verification texte: plus de references `pkcon/PackageKit/offline-trigger` dans les fichiers principaux.
+- Ajout d'un MVP visuel offline upgrade via Plymouth (chemin APT fallback, maintenant principal):
+  - fichier: `packaging/assets/bin/offline-upgrade.sh`.
+  - nouveautes:
+    - fonctions utilitaires `plymouth_msg` et `plymouth_pct` (tolerantes si plymouth indisponible),
+    - messages de progression par phases: preparation, index, installation, finalisation,
+    - progression approximative (5/10/25/95/100).
+  - journalisation offline ajoutee dans `/var/log/debian-upgrade-offline.log` (timestamps UTC).
+  - garde-fou conserve: verification du marker `/system-update` avant execution.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Passage release en `1.3.3`:
+  - bump version crates:
+    - `backend-cli/Cargo.toml` -> `1.3.3`
+    - `frontend-gui/Cargo.toml` -> `1.3.3`
+    - `upgrade-core/Cargo.toml` -> `1.3.3`
+  - bump packaging pacstall:
+    - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="1.3.3"`
+  - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement flux offline APT: suppression de `apt-get update` dans `offline-upgrade.sh`.
+  - raison: en mode offline, les paquets sont deja prepares en amont; on evite toute dependance reseau au reboot.
+  - message Plymouth ajuste: "application des paquets prepares".
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.

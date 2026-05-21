@@ -832,7 +832,7 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
     }
 }
 
-// Prépare les paquets via PackageKit (refresh + téléchargement hors-ligne).
+// Prépare les paquets nécessaires (clean, update, download-only dist-upgrade).
 fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "prepare-packages";
 
@@ -840,11 +840,17 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
         LogLevel::Info,
         step,
         StepState::Running,
-        "Preparation des paquets via PackageKit...",
+        "Nettoyage cache APT et téléchargement des paquets...",
     ))?;
 
-    emit_debug(ctx, step, "Commande: pkcon -y --noninteractive refresh force", emit)?;
-    emit_debug(ctx, step, "Commande: pkcon -y --noninteractive update --only-download", emit)?;
+    emit_debug(ctx, step, "Commande: apt-get clean", emit)?;
+    emit_debug(ctx, step, "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get update", emit)?;
+    emit_debug(
+        ctx,
+        step,
+        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true --download-only dist-upgrade",
+        emit,
+    )?;
 
     if ctx.dry_run {
         emit(event(
@@ -856,8 +862,39 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
         return Ok(());
     }
 
-    run_and_report(step, emit, "pkcon", &["-y", "--noninteractive", "refresh", "force"])?;
-    run_and_report(step, emit, "pkcon", &["-y", "--noninteractive", "update", "--only-download"])?;
+    run_and_report(step, emit, "apt-get", &["clean"])?;
+    run_and_report(
+        step,
+        emit,
+        "env",
+        &[
+            "DEBIAN_FRONTEND=noninteractive",
+            "DEBIAN_PRIORITY=critical",
+            "APT_LISTCHANGES_FRONTEND=none",
+            "apt-get",
+            "update",
+        ],
+    )?;
+    run_and_report(
+        step,
+        emit,
+        "env",
+        &[
+            "DEBIAN_FRONTEND=noninteractive",
+            "DEBIAN_PRIORITY=critical",
+            "APT_LISTCHANGES_FRONTEND=none",
+            "apt-get",
+            "-y",
+            "-o",
+            "Dpkg::Options::=--force-confdef",
+            "-o",
+            "Dpkg::Options::=--force-confold",
+            "-o",
+            "APT::Get::Always-Include-Phased-Updates=true",
+            "--download-only",
+            "dist-upgrade",
+        ],
+    )?;
 
     emit(event(
         LogLevel::Success,
@@ -867,41 +904,62 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
     ))
 }
 
-// Vérifie que PackageKit voit bien l'état des mises à jour.
+// Lance un test apt-get -s dist-upgrade en mode non interactif.
 fn run_dry_run_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "dry-run-upgrade";
     emit(event(
         LogLevel::Info,
         step,
         StepState::Running,
-        "Verification pre-upgrade via PackageKit...",
+        "Test dry-run de la mise a niveau...",
     ))?;
 
-    emit_debug(ctx, step, "Commande: pkcon --noninteractive get-updates", emit)?;
+    emit_debug(
+        ctx,
+        step,
+        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -s -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade",
+        emit,
+    )?;
 
     if ctx.dry_run {
         emit(event(
             LogLevel::Warn,
             step,
             StepState::Done,
-            "Mode dry-run: simulation uniquement, pas d'execution pkcon.",
+            "Mode dry-run: simulation uniquement, pas d'execution apt-get -s.",
         ))?;
         return Ok(());
     }
 
-    run_and_report(step, emit, "pkcon", &["--noninteractive", "get-updates"])?;
+    run_and_report(
+        step,
+        emit,
+        "env",
+        &[
+            "DEBIAN_FRONTEND=noninteractive",
+            "DEBIAN_PRIORITY=critical",
+            "APT_LISTCHANGES_FRONTEND=none",
+            "apt-get",
+            "-s",
+            "-o",
+            "Dpkg::Options::=--force-confdef",
+            "-o",
+            "Dpkg::Options::=--force-confold",
+            "dist-upgrade",
+        ],
+    )?;
     emit(event(
         LogLevel::Success,
         step,
         StepState::Done,
-        "Verification PackageKit valide.",
+        "Dry-run upgrade valide.",
     ))
 }
 
-// Prépare l'intention d'upgrade hors-ligne et journalise la commande cible PackageKit.
+// Prépare l'intention d'upgrade hors-ligne et journalise la commande cible.
 fn run_schedule_offline_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "schedule-offline-upgrade";
-    let reboot_cmd = "pkcon offline-trigger && systemctl reboot".to_string();
+    let reboot_cmd = "env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade".to_string();
 
     run_step(
         ctx,
@@ -911,7 +969,7 @@ fn run_schedule_offline_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> 
             "Préparer marqueur d'upgrade hors-ligne",
             "Configurer déclenchement au prochain reboot",
             "Journaliser l'intention d'upgrade",
-            "Forcer le mode non interactif PackageKit avec choix par défaut",
+            "Forcer le mode non interactif APT avec choix par défaut",
         ],
         emit,
     )?;
