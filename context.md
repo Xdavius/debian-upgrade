@@ -413,3 +413,10 @@ Responsabilités:
     - ajout d'un garde-fou avec log explicite si le socket DBus utilisateur est absent.
   - Packaging: ajout de la dependance `dbus-user-session` dans `packaging/pacstall/debian-upgrade.pacscript`.
   - Validation: `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK; `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Passage de version release:
+  - bump des crates Rust en `1.1.0`:
+    - `backend-cli/Cargo.toml`
+    - `frontend-gui/Cargo.toml`
+    - `upgrade-core/Cargo.toml`
+  - bump packaging pacstall: `pkgver=\"1.1.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
