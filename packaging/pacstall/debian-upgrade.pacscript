@@ -12,21 +12,37 @@ depends=(
   "apt"
   "ca-certificates"
   "libnotify-bin"
-  "policykit-1"
+  "pkexec"
   "sudo"
   "systemd"
 )
 
 makedepends=(
-  "build-essential"
-  "cargo"
-  "rustc"
+  'build-essential'
+  'cargo'
+  'rustc'
 )
 
 source=("git+https://github.com/Xdavius/debian-upgrade.git#branch=dev")
+external_connection="true"
 
 build() {
   cd "${srcdir}/debian-upgrade" || exit 1
+
+  min_rustc='1.85.0'
+  rustc_version="$(rustc --version | awk '{print $2}')"
+  if [ "$(printf '%s\n' "$min_rustc" "$rustc_version" | sort -V | head -n1)" != "$min_rustc" ]; then
+    echo "Erreur: rustc $rustc_version detecte, version minimale requise: $min_rustc"
+    exit 1
+  fi
+
+  min_cargo='1.85.0'
+  cargo_version="$(cargo --version | awk '{print $2}')"
+  if [ "$(printf '%s\n' "$min_cargo" "$cargo_version" | sort -V | head -n1)" != "$min_cargo" ]; then
+    echo "Erreur: cargo $cargo_version detecte, version minimale requise: $min_cargo"
+    exit 1
+  fi
+
   cargo build --release -p frontend-gui -p backend-cli
 }
 

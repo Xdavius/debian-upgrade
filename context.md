@@ -388,6 +388,11 @@ Responsabilités:
   - dependance `zenity` retiree du package,
   - README mis a jour (service root, actions dans la notification, suppression popup zenity).
   - Pacscript: ajout d'un hook `post_install()` qui execute `systemctl daemon-reload` puis `systemctl enable --now debian-upgrade-notify.timer` (mode tolerant avec `|| true`).
+  - Correctif compatibilite dependances Debian: remplacement de `policykit-1` par `pkexec` dans `packaging/pacstall/debian-upgrade.pacscript` (absence de candidate `policykit-1` sur l'environnement cible).
+  - Ajustement robustesse Pacstall pour toolchain Rust:
+    - retrait des contraintes versionnees `cargo>=...` / `rustc>=...` dans `makedepends` (evite les warnings dpkg sur version `<aucun>` lors de la resolution),
+    - ajout d'un controle explicite des versions minimales (`cargo`/`rustc` >= 1.85.0) dans `build()` avec message d'erreur clair en cas de version insuffisante.
 - Validation post-refonte:
   - `bash -n packaging/assets/bin/check-upgrade-notify.sh` OK.
   - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Hygiene depot: ajout de `*.deb` dans `.gitignore` pour eviter le suivi des artefacts de packaging.
