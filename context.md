@@ -531,3 +531,11 @@ Responsabilités:
     - lancement de l'agent fallback sans reutiliser le mot de passe sur le meme stdin que les commandes agent.
   - objectif: eviter que des entrees sensibles puissent se retrouver melangees au flux de commandes/logs en cas d'authentification incorrecte.
   - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Adaptation du flux offline apres test VM (blocage Plymouth / reboot instable):
+  - retrait du reboot explicite en fin de `offline-upgrade.sh` (`systemctl --no-block reboot` supprime),
+  - reboot confie a systemd via le service offline:
+    - `SuccessAction=reboot`
+    - `FailureAction=reboot` (deja en place, conserve)
+  - ajout `TimeoutStartSec=infinity` pour eviter un timeout systemd pendant un `apt-get dist-upgrade` long.
+  - objectif: terminer proprement le cycle `system-update.target` et eviter les reboots "crash/race" pendant l'offline upgrade.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.

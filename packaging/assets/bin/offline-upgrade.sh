@@ -20,5 +20,3 @@ apt-get -y \
   -o Dpkg::Options::=--force-confold \
   -o APT::Get::Always-Include-Phased-Updates=true \
   dist-upgrade
-
-systemctl --no-block reboot
