@@ -95,16 +95,6 @@ fn simulate_work() {
     thread::sleep(Duration::from_millis(150));
 }
 
-// Préfixe d'environnement pour forcer les commandes APT en non interactif.
-fn noninteractive_env_prefix() -> &'static str {
-    "DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none"
-}
-
-// Options APT/Dpkg utilisées pour éviter les prompts bloquants.
-fn apt_noninteractive_opts() -> &'static str {
-    "-y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true"
-}
-
 // Exécute une étape générique avec logs communs et mode dry-run.
 fn run_step(
     ctx: AppContext,
@@ -845,8 +835,6 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
 // Prépare les paquets nécessaires (clean, update, download-only dist-upgrade).
 fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "prepare-packages";
-    let env_prefix = noninteractive_env_prefix();
-    let apt_opts = apt_noninteractive_opts();
 
     emit(event(
         LogLevel::Info,
@@ -855,12 +843,12 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
         "Nettoyage cache APT et téléchargement des paquets...",
     ))?;
 
-    emit_debug(ctx, step, format!("Commande: apt-get clean"), emit)?;
-    emit_debug(ctx, step, format!("Commande: env {env_prefix} apt-get update"), emit)?;
+    emit_debug(ctx, step, "Commande: apt-get clean", emit)?;
+    emit_debug(ctx, step, "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get update", emit)?;
     emit_debug(
         ctx,
         step,
-        format!("Commande: env {env_prefix} apt-get {apt_opts} --download-only dist-upgrade"),
+        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true --download-only dist-upgrade",
         emit,
     )?;
 
@@ -971,9 +959,7 @@ fn run_dry_run_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()
 // Prépare l'intention d'upgrade hors-ligne et journalise la commande cible.
 fn run_schedule_offline_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "schedule-offline-upgrade";
-    let env_prefix = noninteractive_env_prefix();
-    let apt_opts = apt_noninteractive_opts();
-    let reboot_cmd = format!("env {env_prefix} apt-get {apt_opts} dist-upgrade");
+    let reboot_cmd = "env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade".to_string();
 
     run_step(
         ctx,
@@ -1001,7 +987,7 @@ fn run_schedule_offline_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> 
             step,
             StepState::Pending,
             format!(
-                "Commande planifiée au reboot (non interactive): {reboot_cmd}"
+                "Commande planifiee au reboot: {reboot_cmd}"
             ),
         ))?;
     }

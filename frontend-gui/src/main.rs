@@ -4,12 +4,13 @@ use std::{fs, path::Path};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
 use slint::Model;
+use serde::{Deserialize, Serialize};
 
 use upgrade_core::{
     check_new_major_release, run_command, AppContext, Command as CoreCommand, Event as CoreEvent,
@@ -25,11 +26,19 @@ struct UiEvent {
     message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct AppSessionConfig {
+    debug_mode: bool,
+    selected_third_party_repos: Vec<String>,
+}
+
 static DEFERRED_LOG_LINES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 static LOG_RING: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
+static PRIVILEGED_AGENT: OnceLock<Mutex<Option<PrivilegedAgentSession>>> = OnceLock::new();
 const MAX_LOG_LINES: usize = 1200;
 const LOG_FLUSH_INTERVAL_MS: u64 = 40;
 const LOG_LINES_PER_FLUSH: usize = 8;
+const AGENT_DONE_PREFIX: &str = "__AGENT_DONE__";
 
 // Retourne le buffer temporaire de logs quand la zone de texte est focalisée.
 fn deferred_log_lines() -> &'static Mutex<Vec<String>> {
@@ -41,6 +50,17 @@ fn log_ring() -> &'static Mutex<VecDeque<String>> {
     LOG_RING.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
+struct PrivilegedAgentSession {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    debug: bool,
+}
+
+fn privileged_agent_slot() -> &'static Mutex<Option<PrivilegedAgentSession>> {
+    PRIVILEGED_AGENT.get_or_init(|| Mutex::new(None))
+}
+
 #[derive(Clone, Copy)]
 struct RunMode {
     debug: bool,
@@ -50,6 +70,43 @@ struct RunMode {
 fn parse_run_mode() -> RunMode {
     let debug = std::env::args().any(|arg| arg == "--debug");
     RunMode { debug }
+}
+
+// Retourne le chemin du fichier de session/config utilisateur.
+fn session_config_path() -> PathBuf {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join("debian-upgrade").join("session.json")
+}
+
+// Charge la config de session, ou crée un fichier par défaut si absent/corrompu.
+fn load_or_init_session_config(debug_mode: bool) -> AppSessionConfig {
+    let path = session_config_path();
+    if let Ok(content) = fs::read_to_string(&path) {
+        if let Ok(cfg) = serde_json::from_str::<AppSessionConfig>(&content) {
+            return cfg;
+        }
+    }
+
+    let cfg = AppSessionConfig {
+        debug_mode,
+        selected_third_party_repos: Vec::new(),
+    };
+    let _ = save_session_config(&cfg);
+    cfg
+}
+
+// Sauvegarde la config/session utilisateur sur disque.
+fn save_session_config(cfg: &AppSessionConfig) -> anyhow::Result<()> {
+    let path = session_config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let data = serde_json::to_string_pretty(cfg)?;
+    fs::write(path, data)?;
+    Ok(())
 }
 
 // Crée la fenêtre Slint avec fallback de backend de rendu si besoin.
@@ -71,160 +128,54 @@ fn create_app_window_with_backend_fallback() -> Result<AppWindow, slint::Platfor
     }
 }
 
-// Exécute un script shell en privilèges élevés via pkexec.
-fn run_with_pkexec(script: &str) -> anyhow::Result<()> {
-    let status = Command::new("pkexec")
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg(script)
-        .status()
-        .map_err(|e| anyhow::anyhow!("pkexec indisponible ou echec lancement: {e}"))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("pkexec a echoue: {status}"))
-    }
-}
-
-// Lance un programme via pkexec et stream sa sortie standard ligne par ligne.
-fn run_with_pkexec_stream<F>(program: &str, args: &[&str], mut on_stdout_line: F) -> anyhow::Result<()>
-where
-    F: FnMut(&str),
-{
-    let mut child = Command::new("pkexec")
-        .arg(program)
-        .args(args)
-        .stdout(Stdio::piped())
-        // Avoid pipe deadlocks on noisy stderr during long apt runs.
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("pkexec indisponible ou echec lancement: {e}"))?;
-
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            let l = line.trim();
-            if !l.is_empty() {
-                on_stdout_line(l);
-            }
-        }
-    }
-
-    let status = child
-        .wait()
-        .map_err(|e| anyhow::anyhow!("pkexec echec attente: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("pkexec a echoue: {status}"))
-    }
-}
-
-// Fallback d'élévation via zenity (mot de passe) puis sudo non interactif.
-fn run_with_zenity_fallback(script: &str) -> anyhow::Result<()> {
-    let output = Command::new("zenity")
+// Helper fallback de saisie mot de passe: zenity puis kdialog.
+// L'ordre global d'elevation reste: pkexec d'abord, puis sudo via ce helper.
+fn read_password_from_zenity_or_kdialog() -> anyhow::Result<String> {
+    let zenity = Command::new("zenity")
         .arg("--password")
         .arg("--title=Authentification requise")
-        .output()
-        .map_err(|e| anyhow::anyhow!("zenity indisponible: {e}"))?;
+        .output();
+    let output = match zenity {
+        Ok(o) if o.status.success() => o,
+        _ => Command::new("kdialog")
+            .arg("--password")
+            .arg("Authentification requise")
+            .output()
+            .map_err(|e| anyhow::anyhow!("zenity/kdialog indisponibles: {e}"))?,
+    };
 
     if !output.status.success() {
-        return Err(anyhow::anyhow!("zenity annule ou en echec"));
+        return Err(anyhow::anyhow!("saisie mot de passe annulee ou en echec"));
     }
 
     let mut password = String::from_utf8(output.stdout)
-        .map_err(|e| anyhow::anyhow!("mot de passe zenity invalide UTF-8: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("mot de passe invalide UTF-8: {e}"))?;
     while password.ends_with('\n') || password.ends_with('\r') {
         password.pop();
     }
+    Ok(password)
+}
 
+// Valide un mot de passe sudo sans lancer l'agent, pour éviter tout mélange password/commandes.
+fn validate_sudo_password(password: &str) -> anyhow::Result<()> {
     let mut child = Command::new("sudo")
         .arg("-S")
-        .arg("/bin/sh")
-        .arg("-c")
-        .arg(script)
+        .arg("-v")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| anyhow::anyhow!("sudo fallback impossible a lancer: {e}"))?;
-
+        .map_err(|e| anyhow::anyhow!("sudo -v impossible a lancer: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(format!("{password}\n").as_bytes());
     }
     let status = child
         .wait()
-        .map_err(|e| anyhow::anyhow!("sudo fallback echec attente: {e}"))?;
-
-    // Effacement explicite du champ mot de passe en memoire.
-    password.replace_range(.., &"\0".repeat(password.len()));
-    password.clear();
-
+        .map_err(|e| anyhow::anyhow!("sudo -v echec attente: {e}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("sudo fallback a echoue: {status}"))
-    }
-}
-
-// Variante streaming du fallback zenity+sudo pour relayer les logs en direct.
-fn run_with_zenity_fallback_stream<F>(program: &str, args: &[&str], mut on_stdout_line: F) -> anyhow::Result<()>
-where
-    F: FnMut(&str),
-{
-    let output = Command::new("zenity")
-        .arg("--password")
-        .arg("--title=Authentification requise")
-        .output()
-        .map_err(|e| anyhow::anyhow!("zenity indisponible: {e}"))?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("zenity annule ou en echec"));
-    }
-
-    let mut password = String::from_utf8(output.stdout)
-        .map_err(|e| anyhow::anyhow!("mot de passe zenity invalide UTF-8: {e}"))?;
-    while password.ends_with('\n') || password.ends_with('\r') {
-        password.pop();
-    }
-
-    let mut child = Command::new("sudo")
-        .arg("-S")
-        .arg(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        // Avoid pipe deadlocks on noisy stderr during long apt runs.
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("sudo fallback impossible a lancer: {e}"))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(format!("{password}\n").as_bytes());
-    }
-
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            let l = line.trim();
-            if !l.is_empty() {
-                on_stdout_line(l);
-            }
-        }
-    }
-
-    let status = child
-        .wait()
-        .map_err(|e| anyhow::anyhow!("sudo fallback echec attente: {e}"))?;
-
-    password.replace_range(.., &"\0".repeat(password.len()));
-    password.clear();
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("sudo fallback a echoue: {status}"))
+        Err(anyhow::anyhow!("authentification sudo refusee"))
     }
 }
 
@@ -295,57 +246,134 @@ where
     })?;
     let bin_str = bin.to_string_lossy().to_string();
 
-    let base_args = if debug { vec!["--dry-run", "--debug"] } else { vec![] };
-    for sub in subcommands {
-        let mut args = base_args.clone();
-        args.push(sub);
-        let args_refs: Vec<&str> = args.to_vec();
+    let mut slot = privileged_agent_slot()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("agent mutex lock echec"))?;
 
-        let mut feed = |line: &str| {
-            for evt in parse_backend_json_events(line.as_bytes()) {
+    let need_restart = if let Some(agent) = slot.as_mut() {
+        if agent.debug != debug {
+            true
+        } else {
+            match agent.child.try_wait() {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(_) => true,
+            }
+        }
+    } else {
+        true
+    };
+
+    if need_restart {
+        *slot = Some(start_privileged_agent(&bin_str, debug)?);
+    }
+
+    let agent = slot.as_mut().ok_or_else(|| anyhow::anyhow!("agent non initialise"))?;
+    for sub in subcommands {
+        agent
+            .stdin
+            .write_all(format!("{sub}\n").as_bytes())
+            .map_err(|e| anyhow::anyhow!("agent write echec ({sub}): {e}"))?;
+        agent
+            .stdin
+            .flush()
+            .map_err(|e| anyhow::anyhow!("agent flush echec ({sub}): {e}"))?;
+
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let n = agent
+                .stdout
+                .read_line(&mut line)
+                .map_err(|e| anyhow::anyhow!("agent read echec ({sub}): {e}"))?;
+            if n == 0 {
+                return Err(anyhow::anyhow!("agent termine de maniere inattendue ({sub})"));
+            }
+            let l = line.trim();
+            if l.is_empty() {
+                continue;
+            }
+            if let Some((prefix, tail)) = l.split_once('|') {
+                if prefix == AGENT_DONE_PREFIX {
+                    let mut parts = tail.split('|');
+                    let status = parts.next().unwrap_or_default();
+                    let cmd_done = parts.next().unwrap_or_default();
+                    if cmd_done == *sub {
+                        if status == "ok" {
+                            break;
+                        }
+                        return Err(anyhow::anyhow!("commande agent en echec: {sub}"));
+                    }
+                }
+            }
+            for evt in parse_backend_json_events(l.as_bytes()) {
                 on_event(evt);
             }
-        };
-
-        if let Err(pk_err) = run_with_pkexec_stream(&bin_str, &args_refs, &mut feed) {
-            run_with_zenity_fallback_stream(&bin_str, &args_refs, &mut feed)
-                .map_err(|zen_err| anyhow::anyhow!("echec elevation privilegies (pkexec puis zenity): {pk_err}; {zen_err}"))?;
         }
     }
     Ok(())
 }
 
-// Arme le mode upgrade hors-ligne systemd puis déclenche le redémarrage.
-fn setup_offline_upgrade_and_reboot() -> anyhow::Result<()> {
-    let setup_script = r#"set -euo pipefail
+fn start_privileged_agent(bin_str: &str, debug: bool) -> anyhow::Result<PrivilegedAgentSession> {
+    let mut args = Vec::new();
+    if debug {
+        args.push("--dry-run");
+        args.push("--debug");
+    }
+    args.push("agent");
 
-if [ ! -x /usr/local/lib/debian-upgrade/offline-upgrade.sh ]; then
-  echo "Script manquant: /usr/local/lib/debian-upgrade/offline-upgrade.sh"
-  exit 1
-fi
-
-if [ ! -f /usr/lib/systemd/system/debian-upgrade-offline.service ]; then
-  echo "Service manquant: /usr/lib/systemd/system/debian-upgrade-offline.service"
-  exit 1
-fi
-
-install -d -m 0755 /var/lib/system-update
-install -d -m 0755 /etc/systemd/system/system-update.target.wants
-ln -snf /usr/lib/systemd/system/debian-upgrade-offline.service /etc/systemd/system/system-update.target.wants/debian-upgrade-offline.service
-ln -snf /var/lib/system-update /system-update
-systemctl daemon-reload
-"#;
-    if let Err(pk_err) = run_with_pkexec(setup_script) {
-        run_with_zenity_fallback(&setup_script)
-            .map_err(|zen_err| anyhow::anyhow!("echec elevation privilegies (pkexec puis zenity): {pk_err}; {zen_err}"))?;
+    if let Ok(mut child) = Command::new("pkexec")
+        .arg(bin_str)
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("pkexec agent stdin indisponible"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("pkexec agent stdout indisponible"))?;
+        return Ok(PrivilegedAgentSession {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            debug,
+        });
     }
 
-    let reboot_script = "systemctl reboot";
-    if let Err(pk_err) = run_with_pkexec(reboot_script) {
-        run_with_zenity_fallback(reboot_script)
-            .map_err(|zen_err| anyhow::anyhow!("echec reboot privilegie (pkexec puis zenity): {pk_err}; {zen_err}"))?;
-    }
-    Ok(())
+    let mut child = Command::new("sudo")
+        .arg(bin_str)
+        .args(&args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("sudo agent impossible a lancer: {e}"))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("sudo agent stdin indisponible"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("sudo agent stdout indisponible"))?;
+    let mut password = read_password_from_zenity_or_kdialog()?;
+    validate_sudo_password(&password)?;
+    password.replace_range(.., &"\0".repeat(password.len()));
+    password.clear();
+
+    Ok(PrivilegedAgentSession {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+        debug,
+    })
 }
 
 // Ajoute une seule ligne de log dans la vue UI.
@@ -535,6 +563,7 @@ fn detect_third_party_candidates() -> Vec<String> {
 // Point d'entrée GUI: initialise la fenêtre, les callbacks et le workflow multi-pages.
 fn main() -> Result<(), slint::PlatformError> {
     let mode = parse_run_mode();
+    let session_cfg = load_or_init_session_config(mode.debug);
     let app = create_app_window_with_backend_fallback()?;
     let window = app.window();
     // Centered startup position (desktop standard 1920x1080 baseline).
@@ -550,7 +579,7 @@ fn main() -> Result<(), slint::PlatformError> {
             .iter()
             .map(|name| ThirdPartyRepo {
                 name: name.clone().into(),
-                enabled: false,
+                enabled: session_cfg.selected_third_party_repos.iter().any(|n| n == name),
             })
             .collect::<Vec<_>>(),
     ));
@@ -732,21 +761,39 @@ fn main() -> Result<(), slint::PlatformError> {
 
             let validate_sources_running_done = Arc::clone(&validate_sources_running);
             thread::spawn(move || {
-                let ctx = AppContext {
-                    dry_run: mode.debug,
-                    debug: mode.debug,
-                };
                 let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
                 let scheduled = Arc::new(AtomicBool::new(false));
 
-                let mut publish = |evt: CoreEvent| {
-                    let ui_evt = core_to_ui_event(evt);
-                    publish_ui_event_batched(&ui, &pending, &scheduled, ui_evt);
-                    Ok(())
+                let result = if mode.debug {
+                    let ctx = AppContext {
+                        dry_run: true,
+                        debug: true,
+                    };
+                    let mut publish = |evt: CoreEvent| {
+                        let ui_evt = core_to_ui_event(evt);
+                        publish_ui_event_batched(&ui, &pending, &scheduled, ui_evt);
+                        Ok(())
+                    };
+                    run_command(ctx, CoreCommand::CheckSources, &mut publish)
+                        .and_then(|_| run_command(ctx, CoreCommand::DisableThirdParty, &mut publish))
+                } else {
+                    let ui_stream = ui.clone();
+                    run_backend_subcommands_via_privileged_backend_stream(
+                        false,
+                        &[
+                            "check-sources",
+                            "disable-third-party",
+                        ],
+                        move |evt| {
+                            publish_ui_event_batched(
+                                &ui_stream,
+                                &pending,
+                                &scheduled,
+                                evt,
+                            );
+                        },
+                    )
                 };
-
-                let result = run_command(ctx, CoreCommand::CheckSources, &mut publish)
-                    .and_then(|_| run_command(ctx, CoreCommand::DisableThirdParty, &mut publish));
 
                 let _ = slint::invoke_from_event_loop(move || {
                     validate_sources_running_done.store(false, Ordering::SeqCst);
@@ -768,51 +815,20 @@ fn main() -> Result<(), slint::PlatformError> {
                                 } else {
                                     append_log(&app, &format!("[warn] Depots tiers re-actives manuellement: {}", enabled.join(", ")));
                                 }
+                                let cfg = AppSessionConfig {
+                                    debug_mode: mode.debug,
+                                    selected_third_party_repos: enabled.clone(),
+                                };
+                                if let Err(err) = save_session_config(&cfg) {
+                                    append_log(&app, &format!("[warn] Impossible de sauvegarder la session: {err}"));
+                                } else {
+                                    append_log(&app, "[info] Session sauvegardee (config utilisateur).");
+                                }
 
                                 app.set_current_page(3);
                                 app.set_header_status("Sources validees".into());
                             }
                             Err(err) => {
-                                let is_permission = format!("{err}").contains("Permission denied")
-                                    || format!("{err}").contains("permission denied")
-                                    || format!("{err}").contains("ecriture /etc/apt");
-                                if is_permission && !mode.debug {
-                                    append_log(&app, "[warn] Permissions insuffisantes detectees, tentative avec elevation privilegiee...");
-                                    app.set_header_status("Elevation privilegiee...".into());
-                                    let ui2 = app.as_weak();
-                                    thread::spawn(move || {
-                                        let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
-                                        let scheduled = Arc::new(AtomicBool::new(false));
-                                        let ui3 = ui2.clone();
-                                        let privileged = run_backend_subcommands_via_privileged_backend_stream(
-                                            false,
-                                            &["check-sources", "disable-third-party"],
-                                            move |evt| {
-                                                publish_ui_event_batched(
-                                                    &ui3,
-                                                    &pending,
-                                                    &scheduled,
-                                                    evt,
-                                                );
-                                            },
-                                        );
-                                        let _ = slint::invoke_from_event_loop(move || {
-                                            if let Some(app) = ui2.upgrade() {
-                                                match privileged {
-                                                    Ok(()) => {
-                                                        app.set_current_page(3);
-                                                        app.set_header_status("Sources validees".into());
-                                                    }
-                                                    Err(p_err) => {
-                                                        append_log(&app, &format!("[error] Echec validation privilegiee: {p_err}"));
-                                                        app.set_header_status("Erreur validation sources".into());
-                                                    }
-                                                }
-                                            }
-                                        });
-                                    });
-                                    return;
-                                }
                                 append_log(&app, &format!("[error] Echec validation sources: {err}"));
                                 app.set_header_status("Erreur validation sources".into());
                             }
@@ -1034,7 +1050,21 @@ fn main() -> Result<(), slint::PlatformError> {
 
                 let ui = app.as_weak();
                 thread::spawn(move || {
-                    let result = setup_offline_upgrade_and_reboot();
+                    let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
+                    let scheduled = Arc::new(AtomicBool::new(false));
+                    let ui_stream = ui.clone();
+                    let result = run_backend_subcommands_via_privileged_backend_stream(
+                        false,
+                        &["arm-and-reboot"],
+                        move |evt| {
+                            publish_ui_event_batched(
+                                &ui_stream,
+                                &pending,
+                                &scheduled,
+                                evt,
+                            );
+                        },
+                    );
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app) = ui.upgrade() {
                             match result {

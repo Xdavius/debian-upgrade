@@ -457,3 +457,186 @@ Responsabilités:
     - `upgrade-core/Cargo.toml`
   - bump packaging pacstall: `pkgver=\"1.1.1\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
   - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Support test VM offline-upgrade:
+  - ajout d'un script utilitaire `buildtest/test-offline-arm.sh` pour tester sans copier/coller:
+    - validation `pkexec`,
+    - verification presence script/service offline packages,
+    - armement du mode offline (sans reboot),
+    - verification finale des liens `/system-update` et `system-update.target.wants`.
+  - script rendu executable et valide (`bash -n` OK).
+  - correctif shell: bloc d'armement privilegie passe de `pkexec /bin/sh -c` a `pkexec /bin/bash -c` pour coherer avec `set -euo pipefail`.
+- Correctif GUI page 5 (armement/reboot):
+  - remplacement du shell privilegie dans `frontend-gui`:
+    - `pkexec /bin/sh -c` -> `pkexec /bin/bash -c`
+    - fallback `sudo -S /bin/sh -c` -> `sudo -S /bin/bash -c`
+  - objectif: eviter l'echec `set -euo pipefail` sous `dash` (`/bin/sh`) et supprimer l'erreur `Erreur armer/reboot` observee en test.
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Base config/session applicative ajoutee cote GUI:
+  - creation/lecture d'un fichier JSON utilisateur `~/.config/debian-upgrade/session.json` (ou `XDG_CONFIG_HOME`),
+  - structure initiale: `debug_mode` + `selected_third_party_repos`,
+  - pre-remplissage des cases depots tiers depuis la session precedente,
+  - sauvegarde automatique des choix depots tiers a la validation des sources (page 2).
+  - objectif: poser la base technique pour un futur setup global (reduction des prompts privilege).
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Premier pas vers "1 prompt max" en mode normal:
+  - refonte du chemin privilegie backend GUI pour executer plusieurs sous-commandes dans une seule elevation (`pkexec`), via une seule commande `bash -lc` chainee.
+  - en cas de permissions insuffisantes detectees page 2, le fallback privilegie enchaine maintenant en une seule session:
+    - `check-sources`
+    - `disable-third-party`
+    - `prepare-packages`
+    - `dry-run-upgrade`
+  - sur succes, la GUI passe directement en page 5 avec statut `Dry-run valide`.
+  - objectif: reduire fortement les redemandes mot de passe sur le parcours normal.
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Iteration suivante: chemin "single prompt" rendu explicite en mode normal (pas seulement fallback):
+  - callback page 2 (`validate_sources`) refactore:
+    - mode normal: elevation privilegiee explicite mais limitee a `check-sources` + `disable-third-party`,
+    - mode debug: conservation du parcours local dry-run historique (progression page 2 -> 3).
+  - retour au flux UX page-par-page demande:
+    - page 2 valide les sources,
+    - page 3 declenche `prepare-packages`,
+    - page 4 declenche `dry-run-upgrade`,
+    - page 5 finalise.
+  - suppression du chainage complet page 2 -> page 5 (non souhaite car court-circuitait la validation utilisateur des depots).
+  - validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- MVP agent privilegie (backend) + adaptation debug:
+  - `backend-cli` etendu avec une sous-commande `agent`:
+    - boucle stdin (`check-sources`, `disable-third-party`, `prepare-packages`, `dry-run-upgrade`, `run-all`, `defer ...`, `quit`),
+    - emission continue des evenements JSON comme les autres commandes.
+  - GUI page 2 (mode normal) branchee sur l'agent privilegie:
+    - lancement unique `pkexec debian-upgrade-backend agent`,
+    - envoi sequence des sous-commandes via stdin,
+    - lecture stream des evenements backend via stdout.
+  - ordre d'elevation/secret aligne selon demande:
+    - tentative prioritaire `pkexec`,
+    - fallback `sudo -S` avec saisie mot de passe `zenity` puis fallback `kdialog`.
+  - ajout helper mot de passe `read_password_from_zenity_or_kdialog()`.
+  - nettoyage: suppression de fonctions streaming privilegiees devenues inutilisees.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Agent privilegie rendu persistant entre pages:
+  - ajout d'une session agent cote GUI (`OnceLock<Mutex<Option<PrivilegedAgentSession>>>`) conservee et reutilisee.
+  - protocole de fin de commande ajoute:
+    - marqueur `__AGENT_DONE__|ok|<cmd>` ou `__AGENT_DONE__|err|<cmd>` emis par `backend-cli agent`.
+  - la GUI envoie les commandes une a une a l'agent et attend le marqueur correspondant avant de poursuivre.
+  - la page 5 utilise desormais l'agent via la commande `arm-and-reboot` (plus de chemin shell privilegie separe).
+  - objectif: eviter les re-prompts entre pages 2/3/4/5 et garder une elevation unique.
+- Nettoyage decisionnel:
+  - suppression conservee de `buildtest/test-offline-arm.sh` (outil devenu inutile apres identification de la cause `/bin/sh` vs `/bin/bash`).
+- Validation finale iteration:
+  - `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Correctif securite/logs suite test mot de passe errone:
+  - suppression du echo de commande brute dans les erreurs agent (`backend-cli`) pour eviter toute fuite potentielle de contenu sensible.
+  - durcissement fallback `sudo` cote GUI:
+    - validation mot de passe isolee via `sudo -S -v`,
+    - lancement de l'agent fallback sans reutiliser le mot de passe sur le meme stdin que les commandes agent.
+  - objectif: eviter que des entrees sensibles puissent se retrouver melangees au flux de commandes/logs en cas d'authentification incorrecte.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Adaptation du flux offline apres test VM (blocage Plymouth / reboot instable):
+  - retrait du reboot explicite en fin de `offline-upgrade.sh` (`systemctl --no-block reboot` supprime),
+  - reboot confie a systemd via le service offline:
+    - `SuccessAction=reboot`
+    - `FailureAction=reboot` (deja en place, conserve)
+  - ajout `TimeoutStartSec=infinity` pour eviter un timeout systemd pendant un `apt-get dist-upgrade` long.
+  - objectif: terminer proprement le cycle `system-update.target` et eviter les reboots "crash/race" pendant l'offline upgrade.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Tentative de migration vers le mecanisme offline natif (ecran de progression desktop):
+  - `arm-and-reboot` (agent backend) adapte pour preferer le chemin PackageKit:
+    - detection `pkcon` + `packagekit-offline-update.service`,
+    - preparation transaction offline (`pkcon -y update --only-download`),
+    - declenchement offline natif (`pkcon offline-trigger`) puis reboot.
+  - fallback conserve vers le chemin offline custom existant si PackageKit n'est pas disponible.
+  - packaging mis a jour avec dependances:
+    - `packagekit`
+    - `packagekit-tools`
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Passage release:
+  - bump version projet vers `1.3.0`:
+    - `backend-cli/Cargo.toml`
+    - `frontend-gui/Cargo.toml`
+    - `upgrade-core/Cargo.toml`
+  - bump packaging pacstall: `pkgver=\"1.3.0\"` dans `packaging/pacstall/debian-upgrade.pacscript`.
+  - validation post-bump: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Bascule "tout pkcon" sur le pipeline principal:
+  - `upgrade-core` migre de `apt-get` vers PackageKit pour les etapes:
+    - `prepare-packages`: `pkcon -y refresh force` puis `pkcon -y update --only-download`.
+    - `dry-run-upgrade`: verification via `pkcon get-updates`.
+    - `schedule-offline-upgrade`: message cible aligne sur `pkcon offline-trigger && systemctl reboot`.
+  - `frontend-gui` aligne les messages/debugs restants:
+    - remplacement des references `apt-get` par `pkcon` dans les logs d'etape et la detection d'erreur associee.
+  - `packaging/assets/bin/offline-upgrade.sh` aligne aussi l'execution offline fallback sur `pkcon`.
+  - objectif: eviter le flux mixte apt/pkcon et standardiser le comportement autour de PackageKit.
+  - validation: `cargo check` (workspace) OK.
+- Durcissement non interactif PackageKit:
+  - ajout de `--noninteractive` sur tous les appels `pkcon` actifs (core, agent backend, script offline fallback).
+  - chemins concernes:
+    - preparation paquets (`refresh`, `update --only-download`),
+    - verification pre-upgrade (`get-updates`),
+    - trigger offline (`offline-trigger`),
+    - execution offline fallback (`update`).
+  - objectif: eviter tout prompt interactif inattendu dans les chemins root/systemd.
+  - validation: `cargo check` OK.
+- Ajustement demande utilisateur: le script offline fallback repasse en `apt-get` non interactif.
+  - fichier: `packaging/assets/bin/offline-upgrade.sh`
+  - commandes restorees:
+    - `apt-get update`
+    - `apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade`
+  - le reste du pipeline principal reste base sur `pkcon`.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Passage release en `1.3.1` pour phase de tests:
+  - bump version crates:
+    - `backend-cli/Cargo.toml` -> `1.3.1`
+    - `frontend-gui/Cargo.toml` -> `1.3.1`
+    - `upgrade-core/Cargo.toml` -> `1.3.1`
+  - bump packaging pacstall:
+    - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="1.3.1"`
+  - validation post-bump: `cargo check` OK.
+- Correctif detection chemin offline natif PackageKit (evite hardcode `/usr/lib/...`):
+  - fichier: `backend-cli/src/main.rs` (`run_agent_arm_and_reboot`).
+  - condition native: `pkcon` present + `systemctl cat packagekit-offline-update.service` OK.
+  - resolution du chemin unite via `systemctl show -p FragmentPath --value packagekit-offline-update.service`.
+  - fallback interne sur `/usr/lib/...` puis `/lib/...` si FragmentPath vide.
+  - armement dans `/etc/systemd/system/system-update.target.wants/` avec lien vers le chemin resolu.
+  - objectif: declencher le chemin natif meme si l'unite n'est pas au chemin hardcode precedent.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Preparation paquets durcie: ajout d'un nettoyage explicite du cache APT avant le flux PackageKit.
+  - fichier: `upgrade-core/src/lib.rs` (`run_prepare_packages`).
+  - sequence: `apt-get clean` puis `pkcon -y --noninteractive refresh force` puis `pkcon -y --noninteractive update --only-download`.
+  - objectif: repartir d'un cache propre pour limiter les comportements parasites.
+  - validation: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Reorientation complete vers APT (abandon du chemin PackageKit/pkcon pour la montee majeure):
+  - `upgrade-core` repasse full APT:
+    - `prepare-packages`: `apt-get clean`, `apt-get update`, `apt-get --download-only dist-upgrade` (non interactif + options dpkg).
+    - `dry-run-upgrade`: `apt-get -s dist-upgrade` (non interactif + options dpkg).
+    - `schedule-offline-upgrade`: message cible aligne sur commande APT non interactive.
+  - `backend-cli` (`arm-and-reboot`) simplifie:
+    - suppression de la branche native PackageKit.
+    - armement direct du service offline custom `debian-upgrade-offline.service` + marker `/system-update`, puis reboot.
+  - `frontend-gui` alignee sur APT:
+    - logs debug dry-run reviennent a `apt-get -s dist-upgrade`.
+    - detection d'erreur permission alignee sur `apt-get` (au lieu de `pkcon`).
+  - `pacscript` nettoye:
+    - suppression des dependances `packagekit` et `packagekit-tools`.
+  - validation:
+    - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+    - verification texte: plus de references `pkcon/PackageKit/offline-trigger` dans les fichiers principaux.
+- Ajout d'un MVP visuel offline upgrade via Plymouth (chemin APT fallback, maintenant principal):
+  - fichier: `packaging/assets/bin/offline-upgrade.sh`.
+  - nouveautes:
+    - fonctions utilitaires `plymouth_msg` et `plymouth_pct` (tolerantes si plymouth indisponible),
+    - messages de progression par phases: preparation, index, installation, finalisation,
+    - progression approximative (5/10/25/95/100).
+  - journalisation offline ajoutee dans `/var/log/debian-upgrade-offline.log` (timestamps UTC).
+  - garde-fou conserve: verification du marker `/system-update` avant execution.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Passage release en `1.3.3`:
+  - bump version crates:
+    - `backend-cli/Cargo.toml` -> `1.3.3`
+    - `frontend-gui/Cargo.toml` -> `1.3.3`
+    - `upgrade-core/Cargo.toml` -> `1.3.3`
+  - bump packaging pacstall:
+    - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="1.3.3"`
+  - validation post-bump: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement flux offline APT: suppression de `apt-get update` dans `offline-upgrade.sh`.
+  - raison: en mode offline, les paquets sont deja prepares en amont; on evite toute dependance reseau au reboot.
+  - message Plymouth ajuste: "application des paquets prepares".
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
