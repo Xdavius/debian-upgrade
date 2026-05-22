@@ -188,7 +188,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "backend-cli"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "frontend-gui"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -4033,7 +4033,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "upgrade-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "anyhow",
  "chrono",

@@ -947,22 +947,30 @@ fn main() -> Result<(), slint::PlatformError> {
 
             let prepare_dkms_running_done = Arc::clone(&prepare_dkms_running);
             thread::spawn(move || {
-                let ctx = AppContext {
-                    dry_run: mode.debug,
-                    debug: mode.debug,
-                };
-                let mut publish = |evt: CoreEvent| {
-                    let ui_evt = core_to_ui_event(evt);
-                    let ui_clone = ui.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(app) = ui_clone.upgrade() {
-                            apply_ui_event(&app, ui_evt);
-                        }
-                    });
-                    Ok(())
-                };
+                let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
+                let scheduled = Arc::new(AtomicBool::new(false));
 
-                let result = run_command(ctx, CoreCommand::PrepareDkms, &mut publish);
+                let result = if mode.debug {
+                    let ctx = AppContext {
+                        dry_run: true,
+                        debug: true,
+                    };
+                    let mut publish = |evt: CoreEvent| {
+                        let ui_evt = core_to_ui_event(evt);
+                        publish_ui_event_batched(&ui, &pending, &scheduled, ui_evt);
+                        Ok(())
+                    };
+                    run_command(ctx, CoreCommand::PrepareDkms, &mut publish)
+                } else {
+                    let ui_stream = ui.clone();
+                    run_backend_subcommands_via_privileged_backend_stream(
+                        false,
+                        &["prepare-dkms".to_string()],
+                        move |evt| {
+                            publish_ui_event_batched(&ui_stream, &pending, &scheduled, evt);
+                        },
+                    )
+                };
                 let _ = slint::invoke_from_event_loop(move || {
                     prepare_dkms_running_done.store(false, Ordering::SeqCst);
                     if let Some(app) = ui.upgrade() {
