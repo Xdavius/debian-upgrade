@@ -767,3 +767,31 @@ Responsabilités:
     - format: `Progression: <n>% | <message paquet>`.
   - objectif: rendre visible la progression meme si le theme ne dessine pas de barre native.
 - Validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Correctif UX anti double-clic GUI:
+  - ajout d'un etat UI `action_in_progress` (Slint) pour verrouiller les boutons pendant les etapes longues.
+  - bouton `Suivant/Redemarrer` desactive tant qu'une action est en cours (sauf page 6 `Fermer`).
+  - bouton `Precedent` desactive aussi pendant execution pour eviter navigation concurrente.
+  - `frontend-gui/src/main.rs` met a jour pour activer/desactiver ce verrou autour de:
+    - `check_new_release`
+    - `validate_sources`
+    - `prepare-packages` (y compris fallback privilegie)
+    - `dry-run-upgrade` (y compris fallback privilegie)
+    - `request_reboot` (deverrouillage seulement en cas d'echec)
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Amelioration UX barre de statut GUI: ajout de couleurs par etat.
+  - `frontend-gui/ui/app.slint`: nouvelle propriete `header_status_color` appliquee au texte `Etat:`.
+  - `frontend-gui/src/main.rs`:
+    - ajout d'un mapping de tons (`Neutral`, `Running`, `Success`, `Warn`, `Error`),
+    - helper central `set_header_status(...)` qui applique texte + couleur,
+    - remplacement des mises a jour de statut pour colorer toutes les etapes principales (verification, validation, preparation, dry-run, reboot, erreurs).
+  - `apply_ui_event` colore aussi automatiquement les statuts derives des evenements backend.
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Refonte de l'indicateur d'etapes GUI (demande UX):
+  - suppression de l'affichage `Page X` dans l'en-tete (remplace par titre statique).
+  - ajout d'un stepper visuel dans la barre basse entre les boutons:
+    - 5 etapes (`Release`, `Sources`, `Paquets`, `Dry-run`, `Reboot`),
+    - rond vert pour etapes validees,
+    - rond orange pour l'etape en cours quand `action_in_progress=true`,
+    - rond vide/contour gris pour etapes futures.
+  - connecteurs entre etapes colorises selon progression.
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
