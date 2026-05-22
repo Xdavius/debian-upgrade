@@ -31,6 +31,8 @@ write_post_upgrade_status() {
   local dkms_remove_ok="${6:-0}"
   local dkms_remove_ko="${7:-0}"
   local dkms_failed_modules="${8:-}"
+  local dkms_obsolete_skipped="${9:-0}"
+  local dkms_obsolete_modules="${10:-}"
 
   install -d -m 0755 "${STATE_DIR}"
   {
@@ -43,9 +45,11 @@ write_post_upgrade_status() {
     printf 'dkms_remove_ok=%s\n' "${dkms_remove_ok}"
     printf 'dkms_remove_ko=%s\n' "${dkms_remove_ko}"
     printf 'dkms_failed_modules=%s\n' "${dkms_failed_modules}"
+    printf 'dkms_obsolete_skipped=%s\n' "${dkms_obsolete_skipped}"
+    printf 'dkms_obsolete_modules=%s\n' "${dkms_obsolete_modules}"
   } > "${POST_UPGRADE_STATUS_FILE}"
   touch "${POST_UPGRADE_PENDING_FILE}"
-  log "Etat post-upgrade ecrit: result=${result}, phase=${phase}, dkms_total=${dkms_total}, dkms_ok=${dkms_ok}, dkms_ko=${dkms_ko}, dkms_remove_ok=${dkms_remove_ok}, dkms_remove_ko=${dkms_remove_ko}, dkms_failed_modules=${dkms_failed_modules}."
+  log "Etat post-upgrade ecrit: result=${result}, phase=${phase}, dkms_total=${dkms_total}, dkms_ok=${dkms_ok}, dkms_ko=${dkms_ko}, dkms_remove_ok=${dkms_remove_ok}, dkms_remove_ko=${dkms_remove_ko}, dkms_failed_modules=${dkms_failed_modules}, dkms_obsolete_skipped=${dkms_obsolete_skipped}, dkms_obsolete_modules=${dkms_obsolete_modules}."
 }
 
 run_reboot() {
@@ -228,7 +232,7 @@ run_phase_upgrade() {
         done
       ) >>"${LOG_FILE}" 2>&1; then
       log "Echec phase upgrade (apt full-upgrade)."
-      write_post_upgrade_status "failed_upgrade" "upgrade" "0" "0" "0" "0" "0" ""
+      write_post_upgrade_status "failed_upgrade" "upgrade" "0" "0" "0" "0" "0" "" "0" ""
       return 1
     fi
   fi
@@ -244,7 +248,7 @@ run_phase_upgrade() {
   fi
 
   log "Aucune phase DKMS requise, finalisation immediate."
-  write_post_upgrade_status "success" "upgrade" "0" "0" "0" "0" "0" ""
+  write_post_upgrade_status "success" "upgrade" "0" "0" "0" "0" "0" "" "0" ""
   restore_third_party_repos || log "Restauration depots tiers echouee (non bloquant)"
   rm -f "${PHASE_FILE}" "${PHASE1_OK_FILE}" "${PHASE2_DONE_FILE}"
   plymouth_progress 100
@@ -280,22 +284,53 @@ run_phase_dkms() {
   local remove_ok=0
   local remove_ko=0
   local failed_modules=""
+  local obsolete_skipped=0
+  local obsolete_modules=""
   while IFS=, read -r module version; do
     module="$(printf '%s' "${module}" | xargs)"
     version="$(printf '%s' "${version}" | xargs)"
     [ -n "${module}" ] || continue
     [ -n "${version}" ] || continue
     total=$((total + 1))
+    local source_dir
+    source_dir="/usr/src/${module}-${version}"
+    if [ ! -d "${source_dir}" ]; then
+      obsolete_skipped=$((obsolete_skipped + 1))
+      if [ -n "${obsolete_modules}" ]; then
+        obsolete_modules="${obsolete_modules},${module}"
+      else
+        obsolete_modules="${module}"
+      fi
+      log "DKMS OBSOLETE ${module}/${version}: source absente (${source_dir}), entree ignoree."
+      continue
+    fi
     log "DKMS install ${module}/${version}"
     if [ "${OFFLINE_SIMULATE}" = "1" ]; then
       log "SIMULATE: dkms install -m ${module} -v ${version}"
       ok=$((ok + 1))
       continue
     fi
-    if dkms install -m "${module}" -v "${version}" >>"${LOG_FILE}" 2>&1; then
+    local dkms_install_tmp
+    dkms_install_tmp="$(mktemp "${STATE_DIR}/dkms-install-${module//\//_}-${version//\//_}.XXXXXX.log")"
+    if dkms install -m "${module}" -v "${version}" >"${dkms_install_tmp}" 2>&1; then
+      cat "${dkms_install_tmp}" >>"${LOG_FILE}" 2>/dev/null || true
+      rm -f "${dkms_install_tmp}"
       ok=$((ok + 1))
       log "DKMS OK ${module}/${version}"
     else
+      cat "${dkms_install_tmp}" >>"${LOG_FILE}" 2>/dev/null || true
+      if grep -Eqi '(not found in dkms tree|could not find module source directory|module/version combo not located|does not exist in dkms tree|is not installed)' "${dkms_install_tmp}"; then
+        obsolete_skipped=$((obsolete_skipped + 1))
+        if [ -n "${obsolete_modules}" ]; then
+          obsolete_modules="${obsolete_modules},${module}"
+        else
+          obsolete_modules="${module}"
+        fi
+        log "DKMS OBSOLETE ${module}/${version}: entree devenue obsolete apres upgrade."
+        rm -f "${dkms_install_tmp}"
+        continue
+      fi
+      rm -f "${dkms_install_tmp}"
       ko=$((ko + 1))
       log "DKMS ECHEC ${module}/${version}"
       if [ -n "${failed_modules}" ]; then
@@ -319,9 +354,9 @@ run_phase_dkms() {
 
   log "Phase DKMS terminee: total=${total}, ok=${ok}, ko=${ko}."
   if [ "${ko}" -gt 0 ]; then
-    write_post_upgrade_status "partial_dkms" "dkms" "${total}" "${ok}" "${ko}" "${remove_ok}" "${remove_ko}" "${failed_modules}"
+    write_post_upgrade_status "partial_dkms" "dkms" "${total}" "${ok}" "${ko}" "${remove_ok}" "${remove_ko}" "${failed_modules}" "${obsolete_skipped}" "${obsolete_modules}"
   else
-    write_post_upgrade_status "success_dkms" "dkms" "${total}" "${ok}" "0" "0" "0" ""
+    write_post_upgrade_status "success_dkms" "dkms" "${total}" "${ok}" "0" "0" "0" "" "${obsolete_skipped}" "${obsolete_modules}"
   fi
   restore_third_party_repos || log "Restauration depots tiers echouee (non bloquant)"
   touch "${PHASE2_DONE_FILE}"

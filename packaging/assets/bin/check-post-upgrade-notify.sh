@@ -41,11 +41,13 @@ load_status() {
   dkms_remove_ok="0"
   dkms_remove_ko="0"
   dkms_failed_modules=""
+  dkms_obsolete_skipped="0"
+  dkms_obsolete_modules=""
 
   [ -f "${STATUS_FILE}" ] || return 1
   while IFS='=' read -r key value; do
     case "$key" in
-      result|phase|dkms_total|dkms_ok|dkms_ko|dkms_remove_ok|dkms_remove_ko|dkms_failed_modules)
+      result|phase|dkms_total|dkms_ok|dkms_ko|dkms_remove_ok|dkms_remove_ko|dkms_failed_modules|dkms_obsolete_skipped|dkms_obsolete_modules)
         printf -v "$key" '%s' "$value"
         ;;
     esac
@@ -56,8 +58,9 @@ load_status() {
 build_message() {
   urgency="critical"
   local modules_lines=""
+  local obsolete_lines=""
   case "${result}" in
-    success|success_dkms)
+    success)
       title="Mise a niveau Debian terminee"
       body="Mise a niveau terminee avec succes. Cliquez pour lire le journal detaille si besoin."
       ;;
@@ -65,10 +68,32 @@ build_message() {
       title="Mise a niveau terminee avec avertissement DKMS"
       if [ -n "${dkms_failed_modules}" ]; then
         modules_lines="$(printf '%s' "${dkms_failed_modules}" | tr ',' '\n')"
-        body="$(printf 'DKMS: %s echec(s) sur %s.\nModules en echec :\n%s\nNettoyage auto (dkms remove): %s ok, %s echec(s).\nVerifiez les pilotes et lisez le journal detaille.' \
-          "${dkms_ko}" "${dkms_total}" "${modules_lines}" "${dkms_remove_ok}" "${dkms_remove_ko}")"
+        if [ "${dkms_obsolete_skipped}" != "0" ] && [ -n "${dkms_obsolete_modules}" ]; then
+          obsolete_lines="$(printf '%s' "${dkms_obsolete_modules}" | tr ',' '\n')"
+          body="$(printf 'DKMS: %s echec(s) sur %s.\nModules en echec :\n%s\nEntrees obsoletes ignorees: %s\n%s\nNettoyage auto (dkms remove): %s ok, %s echec(s).\nVerifiez les pilotes et lisez le journal detaille.' \
+            "${dkms_ko}" "${dkms_total}" "${modules_lines}" "${dkms_obsolete_skipped}" "${obsolete_lines}" "${dkms_remove_ok}" "${dkms_remove_ko}")"
+        else
+          body="$(printf 'DKMS: %s echec(s) sur %s.\nModules en echec :\n%s\nNettoyage auto (dkms remove): %s ok, %s echec(s).\nVerifiez les pilotes et lisez le journal detaille.' \
+            "${dkms_ko}" "${dkms_total}" "${modules_lines}" "${dkms_remove_ok}" "${dkms_remove_ko}")"
+        fi
       else
-        body="DKMS: ${dkms_ko} echec(s) sur ${dkms_total}. Nettoyage auto (dkms remove): ${dkms_remove_ok} ok, ${dkms_remove_ko} echec(s). Verifiez les pilotes et lisez le journal detaille."
+        if [ "${dkms_obsolete_skipped}" != "0" ] && [ -n "${dkms_obsolete_modules}" ]; then
+          obsolete_lines="$(printf '%s' "${dkms_obsolete_modules}" | tr ',' '\n')"
+          body="$(printf 'DKMS: %s echec(s) sur %s.\nEntrees obsoletes ignorees: %s\n%s\nNettoyage auto (dkms remove): %s ok, %s echec(s).\nVerifiez les pilotes et lisez le journal detaille.' \
+            "${dkms_ko}" "${dkms_total}" "${dkms_obsolete_skipped}" "${obsolete_lines}" "${dkms_remove_ok}" "${dkms_remove_ko}")"
+        else
+          body="DKMS: ${dkms_ko} echec(s) sur ${dkms_total}. Nettoyage auto (dkms remove): ${dkms_remove_ok} ok, ${dkms_remove_ko} echec(s). Verifiez les pilotes et lisez le journal detaille."
+        fi
+      fi
+      ;;
+    success_dkms)
+      title="Mise a niveau Debian terminee"
+      if [ "${dkms_obsolete_skipped}" != "0" ] && [ -n "${dkms_obsolete_modules}" ]; then
+        obsolete_lines="$(printf '%s' "${dkms_obsolete_modules}" | tr ',' '\n')"
+        body="$(printf 'Mise a niveau terminee avec succes.\nEntrees DKMS obsoletes ignorees: %s\n%s\nCliquez pour lire le journal detaille si besoin.' \
+          "${dkms_obsolete_skipped}" "${obsolete_lines}")"
+      else
+        body="Mise a niveau terminee avec succes. Cliquez pour lire le journal detaille si besoin."
       fi
       ;;
     failed_upgrade)
