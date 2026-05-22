@@ -795,3 +795,24 @@ Responsabilités:
     - rond vide/contour gris pour etapes futures.
   - connecteurs entre etapes colorises selon progression.
 - Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement fonctionnel workflow depots tiers (demande utilisateur):
+  - comportement conserve pendant upgrade: tous les depots tiers sont desactives a l'etape `disable-third-party`.
+  - reactivation post-upgrade desormais restreinte aux depots explicitement coches dans la GUI.
+- Mise en place technique:
+  - `upgrade-core`:
+    - nouvelle commande `SetThirdPartyReactivation { repos }`;
+    - ecriture root de la liste cible dans `/var/lib/debian-upgrade/third-party-reactivate.list`.
+  - `backend-cli` agent:
+    - support de la commande texte `set-third-party-reactivation <repo1,repo2,...>`.
+  - `frontend-gui` page sources:
+    - collecte des depots coches avant execution,
+    - en mode normal, envoi au backend privilegie de la sequence:
+      - `set-third-party-reactivation ...`
+      - `check-sources`
+      - `disable-third-party`
+    - logs UI clarifies vers "selectionnes pour reactivation post-upgrade".
+  - `offline-upgrade.sh`:
+    - restauration tiers filtree par `/var/lib/debian-upgrade/third-party-reactivate.list` (au lieu de tous les fichiers marques).
+- Validation:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.

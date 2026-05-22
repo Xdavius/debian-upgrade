@@ -241,7 +241,7 @@ fn parse_backend_json_events(stdout: &[u8]) -> Vec<UiEvent> {
 // Exécute des sous-commandes backend avec élévation et streaming d'événements.
 fn run_backend_subcommands_via_privileged_backend_stream<F>(
     debug: bool,
-    subcommands: &[&str],
+    subcommands: &[String],
     mut on_event: F,
 ) -> anyhow::Result<()>
 where
@@ -278,6 +278,7 @@ where
 
     let agent = slot.as_mut().ok_or_else(|| anyhow::anyhow!("agent non initialise"))?;
     for sub in subcommands {
+        let sub = sub.as_str();
         agent
             .stdin
             .write_all(format!("{sub}\n").as_bytes())
@@ -306,7 +307,7 @@ where
                     let mut parts = tail.split('|');
                     let status = parts.next().unwrap_or_default();
                     let cmd_done = parts.next().unwrap_or_default();
-                    if cmd_done == *sub {
+                    if cmd_done == sub {
                         if status == "ok" {
                             break;
                         }
@@ -782,6 +783,20 @@ fn main() -> Result<(), slint::PlatformError> {
             }
             let ui = weak.clone();
             let mode = mode;
+            let selected_for_reactivation = if let Some(app) = ui.upgrade() {
+                let mut selected = Vec::<String>::new();
+                let repos = app.get_third_party_repos();
+                for idx in 0..repos.row_count() {
+                    if let Some(repo) = repos.row_data(idx) {
+                        if repo.enabled {
+                            selected.push(repo.name.to_string());
+                        }
+                    }
+                }
+                selected
+            } else {
+                Vec::new()
+            };
 
             let _ = slint::invoke_from_event_loop({
                 let ui = ui.clone();
@@ -812,12 +827,21 @@ fn main() -> Result<(), slint::PlatformError> {
                     run_command(ctx, CoreCommand::CheckSources, &mut publish)
                         .and_then(|_| run_command(ctx, CoreCommand::DisableThirdParty, &mut publish))
                 } else {
+                    let keep_cmd = if selected_for_reactivation.is_empty() {
+                        "set-third-party-reactivation".to_string()
+                    } else {
+                        format!(
+                            "set-third-party-reactivation {}",
+                            selected_for_reactivation.join(",")
+                        )
+                    };
                     let ui_stream = ui.clone();
                     run_backend_subcommands_via_privileged_backend_stream(
                         false,
                         &[
-                            "check-sources",
-                            "disable-third-party",
+                            keep_cmd,
+                            "check-sources".to_string(),
+                            "disable-third-party".to_string(),
                         ],
                         move |evt| {
                             publish_ui_event_batched(
@@ -847,9 +871,9 @@ fn main() -> Result<(), slint::PlatformError> {
                                 }
 
                                 if enabled.is_empty() {
-                                    append_log(&app, "[info] Aucun depot tiers re-active. Tous les depots tiers restent desactives.");
+                                    append_log(&app, "[info] Aucun depot tiers selectionne pour reactivation post-upgrade.");
                                 } else {
-                                    append_log(&app, &format!("[warn] Depots tiers re-actives manuellement: {}", enabled.join(", ")));
+                                    append_log(&app, &format!("[info] Depots tiers selectionnes pour reactivation post-upgrade: {}", enabled.join(", ")));
                                 }
                                 let cfg = AppSessionConfig {
                                     debug_mode: mode.debug,
@@ -937,7 +961,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                         let ui3 = ui2.clone();
                                         let privileged = run_backend_subcommands_via_privileged_backend_stream(
                                             false,
-                                            &["prepare-packages"],
+                                            &["prepare-packages".to_string()],
                                             move |evt| {
                                                 publish_ui_event_batched(
                                                     &ui3,
@@ -1039,7 +1063,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                         let ui3 = ui2.clone();
                                         let privileged = run_backend_subcommands_via_privileged_backend_stream(
                                             false,
-                                            &["dry-run-upgrade"],
+                                            &["dry-run-upgrade".to_string()],
                                             move |evt| {
                                                 publish_ui_event_batched(
                                                     &ui3,
@@ -1098,7 +1122,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     let ui_stream = ui.clone();
                     let result = run_backend_subcommands_via_privileged_backend_stream(
                         false,
-                        &["arm-and-reboot"],
+                        &["arm-and-reboot".to_string()],
                         move |evt| {
                             publish_ui_event_batched(
                                 &ui_stream,

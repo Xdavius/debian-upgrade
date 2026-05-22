@@ -23,10 +23,11 @@ pub enum DeferPeriod {
     Month,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Command {
     CheckNewRelease,
     CheckSources,
+    SetThirdPartyReactivation { repos: Vec<String> },
     DisableThirdParty,
     PreparePackages,
     DryRunUpgrade,
@@ -76,6 +77,7 @@ pub struct ReleaseCheckResult {
 const THIRD_PARTY_DIR: &str = "/etc/apt/sources.list.d";
 const THIRD_PARTY_STATE_DIR: &str = "/var/lib/debian-upgrade";
 const THIRD_PARTY_STATE_FILE: &str = "/var/lib/debian-upgrade/third-party-actions.log";
+const THIRD_PARTY_REACTIVATE_FILE: &str = "/var/lib/debian-upgrade/third-party-reactivate.list";
 const DISABLED_LIST_PREFIX: &str = "# debian-upgrade-disabled ";
 const DISABLED_SOURCES_MARKER: &str = "# debian-upgrade-disabled-enabled";
 
@@ -778,6 +780,75 @@ fn persist_third_party_actions(lines: &[String]) -> Result<()> {
     Ok(())
 }
 
+// Enregistre la liste des fichiers tiers a re-activer apres l'upgrade offline.
+fn run_set_third_party_reactivation(
+    ctx: AppContext,
+    repos: &[String],
+    emit: &mut dyn FnMut(Event) -> Result<()>,
+) -> Result<()> {
+    let step = "set-third-party-reactivation";
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Running,
+        "Enregistrement des depots tiers a re-activer apres upgrade...",
+    ))?;
+
+    let mut cleaned: Vec<String> = repos
+        .iter()
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+        .filter(|r| !r.contains('/') && !r.contains('\0'))
+        .map(ToString::to_string)
+        .collect();
+    cleaned.sort();
+    cleaned.dedup();
+
+    if ctx.dry_run {
+        emit(event(
+            LogLevel::Warn,
+            step,
+            StepState::Done,
+            format!(
+                "Dry-run: {} depot(s) seraient memorises pour reactivation.",
+                cleaned.len()
+            ),
+        ))?;
+        return Ok(());
+    }
+
+    fs::create_dir_all(THIRD_PARTY_STATE_DIR)
+        .with_context(|| format!("creation {}", THIRD_PARTY_STATE_DIR))?;
+    let mut data = String::new();
+    if !cleaned.is_empty() {
+        data.push_str(&cleaned.join("\n"));
+        data.push('\n');
+    }
+    fs::write(THIRD_PARTY_REACTIVATE_FILE, data)
+        .with_context(|| format!("ecriture {}", THIRD_PARTY_REACTIVATE_FILE))?;
+
+    persist_third_party_actions(&[format!(
+        "set-third-party-reactivation|count={}|repos={}",
+        cleaned.len(),
+        if cleaned.is_empty() {
+            "none".to_string()
+        } else {
+            cleaned.join(",")
+        }
+    )])?;
+
+    emit(event(
+        LogLevel::Success,
+        step,
+        StepState::Done,
+        format!(
+            "Liste de reactivation enregistree ({} depot(s)).",
+            cleaned.len()
+        ),
+    ))?;
+    Ok(())
+}
+
 // Désactive les dépôts tiers pour sécuriser la montée de version.
 fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "disable-third-party";
@@ -1138,6 +1209,7 @@ pub fn run_command(ctx: AppContext, command: Command, emit: &mut dyn FnMut(Event
             Ok(())
         }
         Command::CheckSources => run_check_sources(ctx, emit),
+        Command::SetThirdPartyReactivation { repos } => run_set_third_party_reactivation(ctx, &repos, emit),
         Command::DisableThirdParty => run_disable_third_party(ctx, emit),
         Command::PreparePackages => run_prepare_packages(ctx, emit),
         Command::DryRunUpgrade => run_dry_run_upgrade(ctx, emit),

@@ -67,6 +67,18 @@ fn emit_json_stdout(event: Event) -> Result<()> {
 
 // Parse une commande texte simple pour le mode agent.
 fn parse_agent_command(line: &str) -> Option<CoreCommand> {
+    if let Some(raw) = line.trim().strip_prefix("set-third-party-reactivation") {
+        let repos = raw
+            .trim()
+            .strip_prefix(' ')
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        return Some(CoreCommand::SetThirdPartyReactivation { repos });
+    }
     match line.trim() {
         "check-new-release" => Some(CoreCommand::CheckNewRelease),
         "check-sources" => Some(CoreCommand::CheckSources),

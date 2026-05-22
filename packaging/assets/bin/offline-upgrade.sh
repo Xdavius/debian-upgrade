@@ -4,6 +4,7 @@ set -euo pipefail
 TARGET_DIR="/var/lib/system-update"
 LOG_FILE="/var/log/debian-upgrade-offline.log"
 THIRD_PARTY_STATE_FILE="/var/lib/debian-upgrade/third-party-actions.log"
+THIRD_PARTY_REACTIVATE_FILE="/var/lib/debian-upgrade/third-party-reactivate.list"
 THIRD_PARTY_TARGET_DIR="/etc/apt/sources.list.d"
 
 log() {
@@ -54,12 +55,25 @@ restore_third_party_repos() {
     log "Aucun repertoire ${THIRD_PARTY_TARGET_DIR}: restauration depots tiers ignoree."
     return 0
   fi
+  if [ ! -f "${THIRD_PARTY_REACTIVATE_FILE}" ]; then
+    log "Aucune liste de reactivation (${THIRD_PARTY_REACTIVATE_FILE}): restauration ignoree."
+    return 0
+  fi
 
-  log "Reactivation automatique des depots tiers modifies par debian-upgrade"
+  log "Reactivation automatique des depots tiers selectionnes par l'utilisateur"
   local restored_list=0
   local restored_sources=0
 
-  for file_path in "${THIRD_PARTY_TARGET_DIR}"/*; do
+  while IFS= read -r repo_name; do
+    repo_name="$(printf '%s' "${repo_name}" | xargs)"
+    [ -n "${repo_name}" ] || continue
+    case "${repo_name}" in
+      */*|*'..'*)
+        log "Nom de depot invalide ignore: ${repo_name}"
+        continue
+        ;;
+    esac
+    file_path="${THIRD_PARTY_TARGET_DIR}/${repo_name}"
     [ -f "${file_path}" ] || continue
     case "${file_path}" in
       *.list)
@@ -96,7 +110,7 @@ restore_third_party_repos() {
         fi
         ;;
     esac
-  done
+  done < "${THIRD_PARTY_REACTIVATE_FILE}"
 
   log "Reactivation depots tiers terminee: list=${restored_list}, sources=${restored_sources}."
   install -d -m 0755 "$(dirname "${THIRD_PARTY_STATE_FILE}")"
