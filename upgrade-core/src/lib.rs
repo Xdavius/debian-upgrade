@@ -997,6 +997,11 @@ fn parse_dkms_status_line(line: &str) -> Option<DkmsEntry> {
     })
 }
 
+fn normalize_dkms_kernel(raw: &str) -> String {
+    let mut parts = raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty());
+    parts.next().unwrap_or(raw).to_string()
+}
+
 fn try_dkms_status_with_fallback() -> Result<(String, std::process::Output)> {
     let candidates = ["dkms", "/usr/sbin/dkms", "/sbin/dkms", "/usr/bin/dkms"];
     let mut last_err = None;
@@ -1127,9 +1132,29 @@ fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) 
     let mut removed = 0usize;
     if let Some(rk) = running_kernel {
         for e in &entries {
-            if e.kernel.as_deref() == Some(rk.as_str())
-                && (e.status.contains("installed") || e.status.contains("built"))
-            {
+            let normalized_kernel = e.kernel.as_deref().map(normalize_dkms_kernel);
+            let matches_running = normalized_kernel.as_deref() == Some(rk.as_str());
+            let eligible_status = e.status.contains("installed") || e.status.contains("built");
+            if ctx.debug {
+                emit(event(
+                    LogLevel::Debug,
+                    step,
+                    StepState::Pending,
+                    format!(
+                        "Decision remove {}/{}: kernel_raw={} kernel_norm={} running={} status={} eligible_status={} matches_running={}",
+                        e.module,
+                        e.version,
+                        e.kernel.clone().unwrap_or_else(|| "-".to_string()),
+                        normalized_kernel.clone().unwrap_or_else(|| "-".to_string()),
+                        rk,
+                        e.status,
+                        eligible_status,
+                        matches_running
+                    ),
+                ))?;
+            }
+
+            if matches_running && eligible_status {
                 let status = ProcessCommand::new(&dkms_bin)
                     .arg("remove")
                     .arg("-m")
