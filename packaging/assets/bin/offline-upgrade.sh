@@ -28,16 +28,21 @@ report_status_line() {
   local line="$1"
   case "${line}" in
     pmstatus:*)
-      local percent_raw message percent
+      local percent_raw message percent normalized
       percent_raw="$(printf '%s\n' "${line}" | cut -d: -f3)"
       message="$(printf '%s\n' "${line}" | cut -d: -f4-)"
-      percent="${percent_raw%%.*}"
+      normalized="$(printf '%s' "${percent_raw}" | tr ',' '.' | tr -d '[:space:]')"
+      percent="${normalized%%.*}"
       if [[ "${percent}" =~ ^[0-9]+$ ]]; then
         if [ "${percent}" -lt 0 ]; then percent=0; fi
         if [ "${percent}" -gt 100 ]; then percent=100; fi
         plymouth_progress "${percent}"
-      fi
-      if [ -n "${message}" ]; then
+        if [ -n "${message}" ]; then
+          plymouth_message "Progression: ${percent}% | ${message}"
+        else
+          plymouth_message "Progression: ${percent}%"
+        fi
+      elif [ -n "${message}" ]; then
         plymouth_message "${message}"
       fi
       ;;

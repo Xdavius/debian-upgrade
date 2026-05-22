@@ -757,3 +757,13 @@ Responsabilités:
 - Validation post-ajustement:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
   - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement UX GUI des messages d'etat (demande utilisateur):
+  - message de session clarifie: `Session sauvegardee (config utilisateur)` remplace par `Preferences UI sauvegardees (selection des depots tiers)`.
+  - pendant fallback privilegie de l'etape `prepare-packages`, le header n'affiche plus `Elevation privilegiee...` mais `Preparation des paquets en cours...` pour rester coherent avec l'action percue.
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement UX Plymouth offline (retour test utilisateur):
+  - durcissement du parsing `%` des lignes `pmstatus` (support decimal `.` et `,`, suppression espaces) pour eviter perte de progression.
+  - message Plymouth enrichi avec pourcentage explicite a chaque evenement `pmstatus`:
+    - format: `Progression: <n>% | <message paquet>`.
+  - objectif: rendre visible la progression meme si le theme ne dessine pas de barre native.
+- Validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.

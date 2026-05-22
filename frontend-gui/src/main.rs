@@ -822,7 +822,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                 if let Err(err) = save_session_config(&cfg) {
                                     append_log(&app, &format!("[warn] Impossible de sauvegarder la session: {err}"));
                                 } else {
-                                    append_log(&app, "[info] Session sauvegardee (config utilisateur).");
+                                    append_log(&app, "[info] Preferences UI sauvegardees (selection des depots tiers).");
                                 }
 
                                 app.set_current_page(3);
@@ -890,7 +890,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                     || format!("{err}").contains("apt-get");
                                 if is_permission && !mode.debug {
                                     append_log(&app, "[warn] Permissions insuffisantes detectees, tentative avec elevation privilegiee...");
-                                    app.set_header_status("Elevation privilegiee...".into());
+                                    app.set_header_status("Preparation des paquets en cours...".into());
                                     let ui2 = app.as_weak();
                                     thread::spawn(move || {
                                         let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
