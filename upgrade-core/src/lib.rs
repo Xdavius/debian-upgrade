@@ -997,6 +997,28 @@ fn parse_dkms_status_line(line: &str) -> Option<DkmsEntry> {
     })
 }
 
+fn try_dkms_status_with_fallback() -> Result<(String, std::process::Output)> {
+    let candidates = ["dkms", "/usr/sbin/dkms", "/sbin/dkms", "/usr/bin/dkms"];
+    let mut last_err = None;
+    for candidate in candidates {
+        if candidate.starts_with('/') && !Path::new(candidate).is_file() {
+            continue;
+        }
+        match ProcessCommand::new(candidate).arg("status").output() {
+            Ok(output) => {
+                if output.status.success() {
+                    return Ok((candidate.to_string(), output));
+                }
+                last_err = Some(anyhow!("{} status returned non-zero", candidate));
+            }
+            Err(e) => {
+                last_err = Some(anyhow!("{} status execution error: {}", candidate, e));
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("dkms status indisponible")))
+}
+
 fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "prepare-dkms";
     emit(event(
@@ -1006,24 +1028,14 @@ fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) 
         "Preparation des pilotes DKMS avant upgrade...",
     ))?;
 
-    let output = ProcessCommand::new("dkms").arg("status").output();
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        Ok(_) => {
-            emit(event(
-                LogLevel::Warn,
-                step,
-                StepState::Done,
-                "dkms status indisponible ou en echec; etape DKMS ignoree.",
-            ))?;
-            return Ok(());
-        }
+    let (dkms_bin, output) = match try_dkms_status_with_fallback() {
+        Ok(v) => v,
         Err(_) => {
             emit(event(
                 LogLevel::Warn,
                 step,
                 StepState::Done,
-                "Commande dkms introuvable; etape DKMS ignoree.",
+                "dkms status indisponible ou en echec; etape DKMS ignoree.",
             ))?;
             return Ok(());
         }
@@ -1118,7 +1130,7 @@ fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) 
             if e.kernel.as_deref() == Some(rk.as_str())
                 && (e.status.contains("installed") || e.status.contains("built"))
             {
-                let status = ProcessCommand::new("dkms")
+                let status = ProcessCommand::new(&dkms_bin)
                     .arg("remove")
                     .arg("-m")
                     .arg(&e.module)
