@@ -70,8 +70,6 @@ fn parse_agent_command(line: &str) -> Option<CoreCommand> {
     if let Some(raw) = line.trim().strip_prefix("set-third-party-reactivation") {
         let repos = raw
             .trim()
-            .strip_prefix(' ')
-            .unwrap_or("")
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())

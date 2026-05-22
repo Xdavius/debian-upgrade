@@ -816,3 +816,10 @@ Responsabilités:
 - Validation:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
   - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Autotest logique demande par l'utilisateur sur la nouvelle commande de reactivation tiers (`set-third-party-reactivation`) via agent backend en dry-run.
+- Bug detecte puis corrige:
+  - parser agent (`backend-cli/src/main.rs`) ignorait les arguments apres `set-third-party-reactivation` (compteur a 0) a cause d'un `strip_prefix(' ')` apres `trim()`.
+  - correction: parsing direct de la portion restante (`trim().split(',')`).
+- Revalidation apres correctif:
+  - commande `set-third-party-reactivation antigravity,nvidia` -> `Dry-run: 2 depot(s)` (OK).
+  - sequence `set-third-party-reactivation antigravity` puis `disable-third-party` -> marqueurs `__AGENT_DONE__|ok|...` pour les deux commandes (OK).
