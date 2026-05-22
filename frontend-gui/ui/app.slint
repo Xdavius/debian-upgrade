@@ -297,7 +297,7 @@ export component AppWindow inherits Window {
                             width: 124px;
                             height: 40px;
                             text: root.current_page == 7 ? "Fermer" : root.current_page == 6 ? "Redemarrer" : "Suivant";
-                            enabled: root.current_page == 6 || !root.action_in_progress;
+                            enabled: root.current_page == 7 || !root.action_in_progress;
                             clicked => {
                                 if (root.current_page == 7) {
                                     root.close_app();

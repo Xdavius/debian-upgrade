@@ -1075,6 +1075,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                         );
                                         let _ = slint::invoke_from_event_loop(move || {
                                             if let Some(app) = ui2.upgrade() {
+                                                app.set_action_in_progress(false);
                                                 match privileged {
                                                     Ok(()) => {
                                                         set_header_status(&app, "Preparation paquets terminee", StatusTone::Success);
@@ -1183,6 +1184,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                         );
                                         let _ = slint::invoke_from_event_loop(move || {
                                             if let Some(app) = ui2.upgrade() {
+                                                app.set_action_in_progress(false);
                                                 match privileged {
                                                     Ok(()) => {
                                                         set_header_status(&app, "Dry-run valide", StatusTone::Success);
