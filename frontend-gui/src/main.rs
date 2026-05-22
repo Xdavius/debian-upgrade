@@ -27,7 +27,6 @@ struct UiEvent {
 }
 
 enum StatusTone {
-    Neutral,
     Running,
     Success,
     Warn,
@@ -473,27 +472,9 @@ fn core_to_ui_event(event: CoreEvent) -> UiEvent {
     }
 }
 
-// Applique un événement UI en l'écrivant dans la zone de logs.
-fn apply_ui_event(app: &AppWindow, evt: UiEvent) {
-    let tone = if evt.state == "failed" || evt.level == "error" {
-        StatusTone::Error
-    } else if evt.level == "warn" {
-        StatusTone::Warn
-    } else if evt.state == "done" && evt.level == "success" {
-        StatusTone::Success
-    } else if evt.state == "running" {
-        StatusTone::Running
-    } else {
-        StatusTone::Neutral
-    };
-    set_header_status(app, &evt.message, tone);
-    append_log(app, &format!("[{}] {} ({}, {})", evt.level, evt.message, evt.step, evt.state));
-}
-
 fn set_header_status(app: &AppWindow, text: &str, tone: StatusTone) {
     app.set_header_status(text.into());
     let color = match tone {
-        StatusTone::Neutral => slint::Color::from_rgb_u8(79, 91, 102),
         StatusTone::Running => slint::Color::from_rgb_u8(34, 102, 170),
         StatusTone::Success => slint::Color::from_rgb_u8(32, 128, 74),
         StatusTone::Warn => slint::Color::from_rgb_u8(176, 112, 0),
