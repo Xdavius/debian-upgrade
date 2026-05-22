@@ -823,3 +823,28 @@ Responsabilités:
 - Revalidation apres correctif:
   - commande `set-third-party-reactivation antigravity,nvidia` -> `Dry-run: 2 depot(s)` (OK).
   - sequence `set-third-party-reactivation antigravity` puis `disable-third-party` -> marqueurs `__AGENT_DONE__|ok|...` pour les deux commandes (OK).
+- Evolution workflow GUI demandee: ajout d'une page `Pilotes DKMS` entre `Sources` et `Paquets` (pas de pop-up).
+- Refactor navigation pages:
+  - pipeline principal passe a 6 etapes: `Bienvenue` -> `Sources` -> `DKMS` -> `Paquets` -> `Dry-run` -> `Reboot`.
+  - page `Aucune mise a niveau disponible` decalee en page 7.
+  - stepper bas mis a jour avec l'etape `DKMS`.
+- Backend DKMS ajoute:
+  - nouvelle commande `upgrade-core::Command::PrepareDkms` (exposee aussi dans `backend-cli` et mode `agent` via `prepare-dkms`).
+  - action `PrepareDkms`:
+    - lit `dkms status`,
+    - enregistre la liste module/version dans `/var/lib/debian-upgrade/dkms-reinstall.list`,
+    - tente des `dkms remove -m <module> -v <version> -k <kernel-courant>` pour les entrees `installed|built` du kernel courant.
+    - en dry-run: journalisation seulement.
+- GUI branchee sur cette commande:
+  - callback `run_dkms_step` ajoute,
+  - statut et logs dedies,
+  - transition vers page `Paquets` uniquement apres succes DKMS.
+- Validation post-modifs:
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Amelioration verbosite mode `--debug` GUI:
+  - logs supplementaires ajoutes sur les pages Sources, DKMS, Paquets, Dry-run et Finale.
+  - chaque etape debug annonce explicitement:
+    - le type d'execution (`dry-run`/simulation),
+    - la transition de page suivante en cas de succes.
+  - objectif: rendre le flux test debug plus lisible et moins "silencieux".
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.

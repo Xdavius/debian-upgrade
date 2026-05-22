@@ -431,6 +431,14 @@ fn append_logs_batch(app: &AppWindow, lines: &[String]) {
     app.set_logs_text(rendered_with_padding.into());
     if !app.get_logs_has_focus() {
         app.invoke_scroll_logs_to_end(i32::MAX);
+        let weak = app.as_weak();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(app) = weak.upgrade() {
+                if !app.get_logs_has_focus() {
+                    app.invoke_scroll_logs_to_end(i32::MAX);
+                }
+            }
+        });
     }
 }
 
@@ -641,6 +649,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let check_release_running = Arc::new(AtomicBool::new(false));
     let validate_sources_running = Arc::new(AtomicBool::new(false));
+    let prepare_dkms_running = Arc::new(AtomicBool::new(false));
     let prepare_packages_running = Arc::new(AtomicBool::new(false));
     let dry_run_upgrade_running = Arc::new(AtomicBool::new(false));
 
@@ -649,7 +658,7 @@ fn main() -> Result<(), slint::PlatformError> {
         app.on_go_next(move || {
             if let Some(app) = weak.upgrade() {
                 let p = app.get_current_page();
-                if p < 6 {
+                if p < 7 {
                     app.set_current_page(p + 1);
                 }
             }
@@ -759,13 +768,13 @@ fn main() -> Result<(), slint::PlatformError> {
                                         ),
                                     );
                                     set_header_status(&app, "Aucune nouvelle version", StatusTone::Warn);
-                                    app.set_current_page(6);
+                                    app.set_current_page(7);
                                 }
                             }
                             Err(err) => {
                                 append_log(&app, &format!("[error] Echec verification en ligne: {err}"));
                                 set_header_status(&app, "Erreur verification version", StatusTone::Error);
-                                app.set_current_page(6);
+                                app.set_current_page(7);
                             }
                         }
                     }
@@ -805,6 +814,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         app.set_action_in_progress(true);
                         set_header_status(&app, "Validation sources APT", StatusTone::Running);
                         append_log(&app, "[info] Validation des sources officielles...");
+                        if mode.debug {
+                            append_log(&app, "[debug] Page Sources: mode debug => dry-run check-sources + disable-third-party.");
+                        }
                     }
                 }
             });
@@ -860,6 +872,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         app.set_action_in_progress(false);
                         match result {
                             Ok(()) => {
+                                if mode.debug {
+                                    append_log(&app, "[debug] Sources OK -> transition vers page 3 (Pilotes DKMS).");
+                                }
                                 let mut enabled = Vec::new();
                                 let repos = app.get_third_party_repos();
                                 for idx in 0..repos.row_count() {
@@ -901,6 +916,79 @@ fn main() -> Result<(), slint::PlatformError> {
 
     {
         let weak = app.as_weak();
+        let prepare_dkms_running = Arc::clone(&prepare_dkms_running);
+        app.on_run_dkms_step(move || {
+            if let Some(app) = weak.upgrade() {
+                if app.get_current_page() != 3 {
+                    return;
+                }
+            } else {
+                return;
+            }
+            if prepare_dkms_running.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            let ui = weak.clone();
+            let mode = mode;
+
+            let _ = slint::invoke_from_event_loop({
+                let ui = ui.clone();
+                move || {
+                    if let Some(app) = ui.upgrade() {
+                        app.set_action_in_progress(true);
+                        set_header_status(&app, "Preparation DKMS en cours", StatusTone::Running);
+                        append_log(&app, "[info] Analyse et preparation des modules DKMS...");
+                        if mode.debug {
+                            append_log(&app, "[debug] Page DKMS: mode debug => dry-run prepare-dkms.");
+                        }
+                    }
+                }
+            });
+
+            let prepare_dkms_running_done = Arc::clone(&prepare_dkms_running);
+            thread::spawn(move || {
+                let ctx = AppContext {
+                    dry_run: mode.debug,
+                    debug: mode.debug,
+                };
+                let mut publish = |evt: CoreEvent| {
+                    let ui_evt = core_to_ui_event(evt);
+                    let ui_clone = ui.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(app) = ui_clone.upgrade() {
+                            apply_ui_event(&app, ui_evt);
+                        }
+                    });
+                    Ok(())
+                };
+
+                let result = run_command(ctx, CoreCommand::PrepareDkms, &mut publish);
+                let _ = slint::invoke_from_event_loop(move || {
+                    prepare_dkms_running_done.store(false, Ordering::SeqCst);
+                    if let Some(app) = ui.upgrade() {
+                        app.set_action_in_progress(false);
+                        match result {
+                            Ok(()) => {
+                                append_log(&app, "[success] Etape DKMS terminee.");
+                                if mode.debug {
+                                    append_log(&app, "[debug] DKMS OK -> transition vers page 4 (Preparation des paquets).");
+                                }
+                                set_header_status(&app, "Pilotes DKMS prepares", StatusTone::Success);
+                                app.set_current_page(4);
+                            }
+                            Err(err) => {
+                                append_log(&app, &format!("[error] Echec etape DKMS: {err}"));
+                                set_header_status(&app, "Erreur etape DKMS", StatusTone::Error);
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    {
+        let weak = app.as_weak();
         let prepare_packages_running = Arc::clone(&prepare_packages_running);
         app.on_run_download_step(move || {
             if prepare_packages_running.swap(true, Ordering::SeqCst) {
@@ -916,6 +1004,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         app.set_action_in_progress(true);
                         set_header_status(&app, "Telechargement des paquets en cours", StatusTone::Running);
                         append_log(&app, "[info] Demarrage preparation paquets via upgrade-core...");
+                        if mode.debug {
+                            append_log(&app, "[debug] Page Paquets: mode debug => dry-run prepare-packages.");
+                        }
                     }
                 }
             });
@@ -943,8 +1034,11 @@ fn main() -> Result<(), slint::PlatformError> {
                         match result {
                             Ok(()) => {
                                 append_log(&app, "[success] Preparation des paquets terminee.");
+                                if mode.debug {
+                                    append_log(&app, "[debug] Paquets OK -> transition vers page 5 (Dry-run upgrade).");
+                                }
                                 set_header_status(&app, "Preparation paquets terminee", StatusTone::Success);
-                                app.set_current_page(4);
+                                app.set_current_page(5);
                             }
                             Err(err) => {
                                 let is_permission = format!("{err}").contains("Permission denied")
@@ -976,7 +1070,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                                 match privileged {
                                                     Ok(()) => {
                                                         set_header_status(&app, "Preparation paquets terminee", StatusTone::Success);
-                                                        app.set_current_page(4);
+                                                        app.set_current_page(5);
                                                     }
                                                     Err(p_err) => {
                                                         append_log(&app, &format!("[error] Echec preparation privilegiee: {p_err}"));
@@ -1016,6 +1110,9 @@ fn main() -> Result<(), slint::PlatformError> {
                         set_header_status(&app, "Test dry-run upgrade en cours", StatusTone::Running);
                         append_log(&app, "[info] Simulation du test de mise a niveau...");
                         append_log(&app, "[debug] Commande cible future: apt-get -s dist-upgrade");
+                        if mode.debug {
+                            append_log(&app, "[debug] Page Dry-run: mode debug => simulation locale upgrade-core.");
+                        }
                     }
                 }
             });
@@ -1045,8 +1142,11 @@ fn main() -> Result<(), slint::PlatformError> {
                         match result {
                             Ok(()) => {
                                 append_log(&app, "[success] Dry-run upgrade valide: aucune erreur bloquante detectee.");
+                                if mode.debug {
+                                    append_log(&app, "[debug] Dry-run OK -> transition vers page 6 (Mise a niveau finale).");
+                                }
                                 set_header_status(&app, "Dry-run valide", StatusTone::Success);
-                                app.set_current_page(5);
+                                app.set_current_page(6);
                             }
                             Err(err) => {
                                 let is_permission = format!("{err}").contains("Permission denied")
@@ -1078,7 +1178,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                                 match privileged {
                                                     Ok(()) => {
                                                         set_header_status(&app, "Dry-run valide", StatusTone::Success);
-                                                        app.set_current_page(5);
+                                                        app.set_current_page(6);
                                                     }
                                                     Err(p_err) => {
                                                         append_log(&app, &format!("[error] Echec dry-run privilegie: {p_err}"));
@@ -1108,6 +1208,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     set_header_status(&app, "Pret au redemarrage (debug)", StatusTone::Warn);
                     append_log(&app, "[warn] Redemarrage demande (debug): aucune action systeme reelle executee.");
                     append_log(&app, "[info] Execution cible: mode non interactif avec options par defaut (DEBIAN_FRONTEND=noninteractive).");
+                    append_log(&app, "[debug] Page finale debug: armement offline/reboot non executes.");
                     return;
                 }
 

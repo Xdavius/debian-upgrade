@@ -18,6 +18,7 @@ export component AppWindow inherits Window {
     callback go_next();
     callback go_prev();
     callback validate_sources();
+    callback run_dkms_step();
     callback check_new_release();
     callback run_download_step();
     callback run_dry_run_upgrade();
@@ -25,7 +26,7 @@ export component AppWindow inherits Window {
     callback close_app();
     callback set_third_party_enabled(int, bool);
     public function scroll_logs_to_end(offset: int) {
-        // no-op with ScrollView-based logs component
+        logs-scroll.viewport-y = min(0px, logs-scroll.visible-height - logs-scroll.viewport-height);
     }
 
     width: 960px;
@@ -106,9 +107,10 @@ export component AppWindow inherits Window {
                     Text {
                         text: root.current_page == 1 ? "Bienvenue" :
                               root.current_page == 2 ? "Sources APT et depots tiers" :
-                              root.current_page == 3 ? "Preparation des paquets" :
-                              root.current_page == 4 ? "Test de mise a niveau (dry-run)" :
-                              root.current_page == 5 ? "Mise a niveau finale" :
+                              root.current_page == 3 ? "Pilotes DKMS" :
+                              root.current_page == 4 ? "Preparation des paquets" :
+                              root.current_page == 5 ? "Test de mise a niveau (dry-run)" :
+                              root.current_page == 6 ? "Mise a niveau finale" :
                               "Aucune mise a niveau disponible";
                         font-size: 22px;
                         color: #1b1e23;
@@ -121,10 +123,12 @@ export component AppWindow inherits Window {
                             : root.current_page == 2                        
                             ? "Par securite, tous les depots tiers sont desactives par defaut. Vous pouvez les re-activer manuellement si necessaire."
                             : root.current_page == 3
-                            ? "Cette etape va nettoyer le cache APT et telecharger les paquets necessaires. Cliquez sur Suivant pour declencher."
+                            ? "Cette etape prepare les modules DKMS (ex: NVIDIA) pour limiter les risques pendant la mise a niveau du kernel."
                             : root.current_page == 4
-                            ? "Un test de mise a niveau va etre execute en mode simulation pour verifier le deroulement."
+                            ? "Cette etape va nettoyer le cache APT et telecharger les paquets necessaires. Cliquez sur Suivant pour declencher."
                             : root.current_page == 5
+                            ? "Un test de mise a niveau va etre execute en mode simulation pour verifier le deroulement."
+                            : root.current_page == 6
                             ? "En cliquant sur Redemarrer, le PC redemarrera et la mise a niveau hors-ligne sera effectuee."
                             : "Le processus s'arrete ici: aucune nouvelle version majeure Debian n'est disponible pour ce systeme.";
                         wrap: word-wrap;
@@ -176,13 +180,16 @@ export component AppWindow inherits Window {
                         color: #1b1e23;
                     }
 
-                    ScrollView {
+                    logs-scroll := ScrollView {
                         vertical-stretch: 1;
+                        viewport-width: logs-scroll.visible-width;
+                        viewport-height: logs-content.preferred-height + 8px;
                         Rectangle {
-                            width: parent.width;
-                            Text {
+                            width: logs-scroll.visible-width;
+                            height: logs-content.preferred-height + 8px;
+                            logs-content := Text {
                                 x: 0px;
-                                width: parent.width;
+                                width: logs-scroll.visible-width;
                                 text: root.logs_text;
                                 font-size: 14px;
                                 wrap: word-wrap;
@@ -215,7 +222,7 @@ export component AppWindow inherits Window {
                             width: 124px;
                             height: 40px;
                             text: "Precedent";
-                            enabled: root.current_page > 1 && root.current_page < 6 && !root.action_in_progress;
+                        enabled: root.current_page > 1 && root.current_page < 7 && !root.action_in_progress;
                             clicked => { root.go_prev(); }
                         }
                     }
@@ -228,7 +235,7 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             spacing: 8px;
 
-                            for step[i] in [1, 2, 3, 4, 5]: HorizontalLayout {
+                            for step[i] in [1, 2, 3, 4, 5, 6]: HorizontalLayout {
                                 spacing: 6px;
 
                                 Text {
@@ -264,8 +271,9 @@ export component AppWindow inherits Window {
                                     text:
                                         step == 1 ? "Bienvenue" :
                                         step == 2 ? "Sources" :
-                                        step == 3 ? "Paquets" :
-                                        step == 4 ? "Dry-run" :
+                                        step == 3 ? "DKMS" :
+                                        step == 4 ? "Paquets" :
+                                        step == 5 ? "Dry-run" :
                                         "Reboot";
                                     font-size: 14px;
                                     color:
@@ -288,12 +296,12 @@ export component AppWindow inherits Window {
                             y: (parent.height - self.height) / 2;
                             width: 124px;
                             height: 40px;
-                            text: root.current_page == 6 ? "Fermer" : root.current_page == 5 ? "Redemarrer" : "Suivant";
+                            text: root.current_page == 7 ? "Fermer" : root.current_page == 6 ? "Redemarrer" : "Suivant";
                             enabled: root.current_page == 6 || !root.action_in_progress;
                             clicked => {
-                                if (root.current_page == 6) {
+                                if (root.current_page == 7) {
                                     root.close_app();
-                                } else if (root.current_page == 5) {
+                                } else if (root.current_page == 6) {
                                     root.request_reboot();
                                 } else {
                                     if (root.current_page == 1) {
@@ -301,8 +309,10 @@ export component AppWindow inherits Window {
                                     } else if (root.current_page == 2) {
                                         root.validate_sources();
                                     } else if (root.current_page == 3) {
-                                        root.run_download_step();
+                                        root.run_dkms_step();
                                     } else if (root.current_page == 4) {
+                                        root.run_download_step();
+                                    } else if (root.current_page == 5) {
                                         root.run_dry_run_upgrade();
                                     } else {
                                         root.go_next();

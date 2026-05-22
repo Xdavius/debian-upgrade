@@ -29,6 +29,7 @@ pub enum Command {
     CheckSources,
     SetThirdPartyReactivation { repos: Vec<String> },
     DisableThirdParty,
+    PrepareDkms,
     PreparePackages,
     DryRunUpgrade,
     ScheduleOfflineUpgrade,
@@ -78,6 +79,7 @@ const THIRD_PARTY_DIR: &str = "/etc/apt/sources.list.d";
 const THIRD_PARTY_STATE_DIR: &str = "/var/lib/debian-upgrade";
 const THIRD_PARTY_STATE_FILE: &str = "/var/lib/debian-upgrade/third-party-actions.log";
 const THIRD_PARTY_REACTIVATE_FILE: &str = "/var/lib/debian-upgrade/third-party-reactivate.list";
+const DKMS_STATE_FILE: &str = "/var/lib/debian-upgrade/dkms-reinstall.list";
 const DISABLED_LIST_PREFIX: &str = "# debian-upgrade-disabled ";
 const DISABLED_SOURCES_MARKER: &str = "# debian-upgrade-disabled-enabled";
 
@@ -966,6 +968,187 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
     }
 }
 
+#[derive(Debug, Clone)]
+struct DkmsEntry {
+    module: String,
+    version: String,
+    kernel: Option<String>,
+    status: String,
+}
+
+fn parse_dkms_status_line(line: &str) -> Option<DkmsEntry> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (left, status) = trimmed.rsplit_once(':')?;
+    let status = status.trim().to_string();
+
+    let (module_ver, maybe_kernel) = match left.split_once(',') {
+        Some((a, b)) => (a.trim(), Some(b.trim().to_string())),
+        None => (left.trim(), None),
+    };
+    let (module, version) = module_ver.split_once('/')?;
+    Some(DkmsEntry {
+        module: module.trim().to_string(),
+        version: version.trim().to_string(),
+        kernel: maybe_kernel.filter(|k| !k.is_empty()),
+        status,
+    })
+}
+
+fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
+    let step = "prepare-dkms";
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Running,
+        "Preparation des pilotes DKMS avant upgrade...",
+    ))?;
+
+    let output = ProcessCommand::new("dkms").arg("status").output();
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        Ok(_) => {
+            emit(event(
+                LogLevel::Warn,
+                step,
+                StepState::Done,
+                "dkms status indisponible ou en echec; etape DKMS ignoree.",
+            ))?;
+            return Ok(());
+        }
+        Err(_) => {
+            emit(event(
+                LogLevel::Warn,
+                step,
+                StepState::Done,
+                "Commande dkms introuvable; etape DKMS ignoree.",
+            ))?;
+            return Ok(());
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entries: Vec<DkmsEntry> = stdout
+        .lines()
+        .filter_map(parse_dkms_status_line)
+        .collect();
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Pending,
+        format!("dkms status: {} entree(s) parsee(s).", entries.len()),
+    ))?;
+    if entries.is_empty() {
+        emit(event(
+            LogLevel::Info,
+            step,
+            StepState::Done,
+            "Aucun module DKMS detecte.",
+        ))?;
+        return Ok(());
+    }
+
+    let mut unique_modvers = Vec::<(String, String)>::new();
+    for e in &entries {
+        let key = (e.module.clone(), e.version.clone());
+        if !unique_modvers.iter().any(|k| k == &key) {
+            unique_modvers.push(key);
+        }
+    }
+    if ctx.debug {
+        for e in &entries {
+            emit(event(
+                LogLevel::Debug,
+                step,
+                StepState::Pending,
+                format!(
+                    "Module detecte: {}/{} kernel={} status={}",
+                    e.module,
+                    e.version,
+                    e.kernel.clone().unwrap_or_else(|| "-".to_string()),
+                    e.status
+                ),
+            ))?;
+        }
+    }
+
+    if ctx.dry_run {
+        emit(event(
+            LogLevel::Warn,
+            step,
+            StepState::Done,
+            format!(
+                "Dry-run: {} module(s) DKMS detecte(s), aucun retrait effectif (liste non ecrite).",
+                unique_modvers.len()
+            ),
+        ))?;
+        return Ok(());
+    }
+
+    fs::create_dir_all(THIRD_PARTY_STATE_DIR)
+        .with_context(|| format!("creation {}", THIRD_PARTY_STATE_DIR))?;
+    let mut list = String::new();
+    for (m, v) in &unique_modvers {
+        list.push_str(&format!("{m},{v}\n"));
+    }
+    fs::write(DKMS_STATE_FILE, list)
+        .with_context(|| format!("ecriture {}", DKMS_STATE_FILE))?;
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Pending,
+        format!(
+            "Liste DKMS a reinstaller enregistree dans {} ({} module(s)).",
+            DKMS_STATE_FILE,
+            unique_modvers.len()
+        ),
+    ))?;
+
+    let running_kernel = ProcessCommand::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None });
+
+    let mut removed = 0usize;
+    if let Some(rk) = running_kernel {
+        for e in &entries {
+            if e.kernel.as_deref() == Some(rk.as_str())
+                && (e.status.contains("installed") || e.status.contains("built"))
+            {
+                let status = ProcessCommand::new("dkms")
+                    .arg("remove")
+                    .arg("-m")
+                    .arg(&e.module)
+                    .arg("-v")
+                    .arg(&e.version)
+                    .arg("-k")
+                    .arg(&rk)
+                    .status();
+                if let Ok(s) = status {
+                    if s.success() {
+                        removed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    emit(event(
+        LogLevel::Success,
+        step,
+        StepState::Done,
+        format!(
+            "Preparation DKMS terminee: {} module(s) detecte(s), {} suppression(s) sur kernel courant.",
+            unique_modvers.len(),
+            removed
+        ),
+    ))?;
+    Ok(())
+}
+
 // Prépare les paquets nécessaires (clean, update, download-only dist-upgrade).
 fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "prepare-packages";
@@ -1211,6 +1394,7 @@ pub fn run_command(ctx: AppContext, command: Command, emit: &mut dyn FnMut(Event
         Command::CheckSources => run_check_sources(ctx, emit),
         Command::SetThirdPartyReactivation { repos } => run_set_third_party_reactivation(ctx, &repos, emit),
         Command::DisableThirdParty => run_disable_third_party(ctx, emit),
+        Command::PrepareDkms => run_prepare_dkms(ctx, emit),
         Command::PreparePackages => run_prepare_packages(ctx, emit),
         Command::DryRunUpgrade => run_dry_run_upgrade(ctx, emit),
         Command::ScheduleOfflineUpgrade => run_schedule_offline_upgrade(ctx, emit),
