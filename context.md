@@ -848,3 +848,28 @@ Responsabilités:
     - la transition de page suivante en cas de succes.
   - objectif: rendre le flux test debug plus lisible et moins "silencieux".
 - Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Implementation de la sequence offline en 2 phases via un seul service `system-update` (sans nouveau service):
+  - nouveau flag de phase dans `/var/lib/debian-upgrade/offline-phase` (`upgrade` ou `dkms`).
+  - marqueurs d'etat anti-boucle:
+    - `/var/lib/debian-upgrade/phase1.ok`
+    - `/var/lib/debian-upgrade/phase2.done`
+- `backend-cli` (`arm-and-reboot`) ajuste:
+  - initialise explicitement `offline-phase=upgrade` avant armement `system-update`.
+  - nettoie les marqueurs `phase1.ok`/`phase2.done` au depart.
+- `offline-upgrade.sh` refondu:
+  - phase `upgrade`:
+    - execute `apt-get full-upgrade` offline,
+    - pose `phase1.ok` si succes,
+    - declenche phase 2 uniquement si la liste DKMS (`/var/lib/debian-upgrade/dkms-reinstall.list`) existe et contient des entrees,
+    - sinon finalise directement (reactivation depots tiers + reboot normal).
+  - phase `dkms`:
+    - execute `dkms install -m <module> -v <version>` (sans `-k`) pour chaque entree de la liste,
+    - journalise total/succes/echecs,
+    - finalise ensuite (reactivation depots tiers + reboot normal).
+  - phase 2 refusee si `phase1.ok` absent.
+- Regle metier respectee:
+  - phase 2 non declenchee si phase 1 n'aboutit pas,
+  - phase 2 inutile si aucun DKMS detecte au prealable.
+- Validation post-modifs:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.

@@ -21,3 +21,9 @@ Note: si `rustc` est trop ancien (ex: 1.63), la GUI peut etre ignoree au build e
 ```bash
 ./run-dry-run-demo.sh
 ```
+
+## Tester l'offline upgrade en 2 phases (simulation)
+
+```bash
+./test-offline-two-phase-dryrun.sh
+```

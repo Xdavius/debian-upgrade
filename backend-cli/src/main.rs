@@ -103,6 +103,9 @@ if [ ! -f /usr/lib/systemd/system/debian-upgrade-offline.service ]; then
   exit 1
 fi
 install -d -m 0755 /var/lib/system-update
+install -d -m 0755 /var/lib/debian-upgrade
+printf 'upgrade\n' > /var/lib/debian-upgrade/offline-phase
+rm -f /var/lib/debian-upgrade/phase1.ok /var/lib/debian-upgrade/phase2.done
 install -d -m 0755 /etc/systemd/system/system-update.target.wants
 ln -snf /usr/lib/systemd/system/debian-upgrade-offline.service \
   /etc/systemd/system/system-update.target.wants/debian-upgrade-offline.service
