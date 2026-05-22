@@ -1,12 +1,9 @@
 [Unit]
-Description=Debian major upgrade (offline)
+Description=Debian Offline Upgrade
 DefaultDependencies=no
-Requires=sysinit.target
-After=sysinit.target system-update-pre.target
-Before=system-update.target
 ConditionPathExists=/system-update
-SuccessAction=reboot
-FailureAction=reboot
+After=local-fs.target plymouth-start.service
+Before=display-manager.service
 
 [Service]
 Type=oneshot

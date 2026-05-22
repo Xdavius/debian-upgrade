@@ -24,7 +24,7 @@ makedepends=(
   "rustc"
 )
 
-source=("git+https://github.com/Xdavius/debian-upgrade.git#branch=dev")
+source=("git+https://github.com/Xdavius/debian-upgrade.git#branch=progress_screen")
 external_connection="true"
 
 build() {

@@ -1,5 +1,7 @@
 use std::fs;
 use std::io::Read;
+use std::io::Write;
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::thread;
 use std::time::Duration;
@@ -70,6 +72,12 @@ pub struct ReleaseCheckResult {
     pub stable_codename: String,
     pub testing_codename: Option<String>,
 }
+
+const THIRD_PARTY_DIR: &str = "/etc/apt/sources.list.d";
+const THIRD_PARTY_STATE_DIR: &str = "/var/lib/debian-upgrade";
+const THIRD_PARTY_STATE_FILE: &str = "/var/lib/debian-upgrade/third-party-actions.log";
+const DISABLED_LIST_PREFIX: &str = "# debian-upgrade-disabled ";
+const DISABLED_SOURCES_MARKER: &str = "# debian-upgrade-disabled-enabled";
 
 // Construit un événement horodaté prêt à être émis côté CLI/GUI.
 fn event(level: LogLevel, step: &'static str, state: StepState, message: impl Into<String>) -> Event {
@@ -632,21 +640,33 @@ fn run_check_sources(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>)
 }
 
 // Désactive les dépôts tiers pour sécuriser la montée de version.
-fn disable_list_repo_lines(file_path: &std::path::Path, dry_run: bool) -> Result<usize> {
+fn disable_list_repo_lines(
+    file_path: &std::path::Path,
+    dry_run: bool,
+    actions: &mut Vec<String>,
+) -> Result<(usize, usize)> {
     let content = fs::read_to_string(file_path)
         .with_context(|| format!("lecture {}", file_path.display()))?;
     let mut changed = 0usize;
+    let mut already_disabled = 0usize;
     let mut rewritten = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            let inner = rest.trim_start();
+            if inner.starts_with("deb ") || inner == "deb" || inner.starts_with("deb-src ") || inner == "deb-src" {
+                already_disabled += 1;
+            }
+        }
         if trimmed.starts_with('#') {
             rewritten.push(line.to_string());
             continue;
         }
 
         if trimmed.starts_with("deb ") || trimmed == "deb" || trimmed.starts_with("deb-src ") || trimmed == "deb-src" {
-            rewritten.push(format!("# {line}"));
+            rewritten.push(format!("{DISABLED_LIST_PREFIX}{line}"));
+            actions.push(format!("list-comment|{}|{}", file_path.display(), line.trim()));
             changed += 1;
         } else {
             rewritten.push(line.to_string());
@@ -661,15 +681,20 @@ fn disable_list_repo_lines(file_path: &std::path::Path, dry_run: bool) -> Result
         fs::write(file_path, out).with_context(|| format!("ecriture {}", file_path.display()))?;
     }
 
-    Ok(changed)
+    Ok((changed, already_disabled))
 }
 
 // Désactive chaque entrée deb822 d'un fichier .sources via "Enabled: no".
-fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result<usize> {
+fn disable_sources_entries(
+    file_path: &std::path::Path,
+    dry_run: bool,
+    actions: &mut Vec<String>,
+) -> Result<(usize, usize)> {
     let content = fs::read_to_string(file_path)
         .with_context(|| format!("lecture {}", file_path.display()))?;
     let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
     let mut changed = 0usize;
+    let mut already_disabled = 0usize;
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -705,14 +730,23 @@ fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result
         match enabled_idx {
             Some(idx) => {
                 if !enabled_is_no {
+                    if idx == stanza_start || lines[idx - 1].trim() != DISABLED_SOURCES_MARKER {
+                        lines.insert(idx, DISABLED_SOURCES_MARKER.to_string());
+                        i += 1;
+                    }
                     lines[idx] = "Enabled: no".to_string();
+                    actions.push(format!("sources-enabled-no|{}|stanza-start={}", file_path.display(), stanza_start));
                     changed += 1;
+                } else {
+                    already_disabled += 1;
                 }
             }
             None => {
-                lines.insert(stanza_end, "Enabled: no".to_string());
+                lines.insert(stanza_end, DISABLED_SOURCES_MARKER.to_string());
+                lines.insert(stanza_end + 1, "Enabled: no".to_string());
+                actions.push(format!("sources-enabled-added|{}|stanza-start={}", file_path.display(), stanza_start));
                 changed += 1;
-                i += 1;
+                i += 2;
             }
         }
     }
@@ -725,7 +759,23 @@ fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result
         fs::write(file_path, out).with_context(|| format!("ecriture {}", file_path.display()))?;
     }
 
-    Ok(changed)
+    Ok((changed, already_disabled))
+}
+
+// Persiste un journal root des actions de désactivation/réactivation des dépôts tiers.
+fn persist_third_party_actions(lines: &[String]) -> Result<()> {
+    let state_dir = Path::new(THIRD_PARTY_STATE_DIR);
+    fs::create_dir_all(state_dir).with_context(|| format!("creation {}", state_dir.display()))?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(THIRD_PARTY_STATE_FILE)
+        .with_context(|| format!("ouverture {}", THIRD_PARTY_STATE_FILE))?;
+    for line in lines {
+        writeln!(file, "[{}] {}", Utc::now().to_rfc3339(), line)
+            .with_context(|| format!("ecriture {}", THIRD_PARTY_STATE_FILE))?;
+    }
+    Ok(())
 }
 
 // Désactive les dépôts tiers pour sécuriser la montée de version.
@@ -738,7 +788,7 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         "Désactivation des sources tierces...",
     ))?;
 
-    let dir = std::path::Path::new("/etc/apt/sources.list.d");
+    let dir = Path::new(THIRD_PARTY_DIR);
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => {
@@ -754,6 +804,8 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
 
     let mut changed_files = 0usize;
     let mut changed_entries = 0usize;
+    let mut already_disabled_entries = 0usize;
+    let mut actions = Vec::<String>::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -768,15 +820,16 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        if ext != "list" && ext != "lsit" && ext != "sources" {
+        if ext != "list" && ext != "sources" {
             continue;
         }
 
-        let changed_in_file = if ext == "sources" {
-            disable_sources_entries(&path, ctx.dry_run)?
+        let (changed_in_file, already_disabled_in_file) = if ext == "sources" {
+            disable_sources_entries(&path, ctx.dry_run, &mut actions)?
         } else {
-            disable_list_repo_lines(&path, ctx.dry_run)?
+            disable_list_repo_lines(&path, ctx.dry_run, &mut actions)?
         };
+        already_disabled_entries += already_disabled_in_file;
 
         if changed_in_file == 0 {
             continue;
@@ -807,6 +860,16 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
                 ),
             ))?;
         }
+    }
+
+    if !ctx.dry_run && !actions.is_empty() {
+        let mut action_lines = Vec::with_capacity(actions.len() + 1);
+        action_lines.push("disable-third-party|start".to_string());
+        action_lines.extend(actions);
+        action_lines.push(format!(
+            "disable-third-party|summary|changed_files={changed_files}|changed_entries={changed_entries}|already_disabled_entries={already_disabled_entries}"
+        ));
+        persist_third_party_actions(&action_lines)?;
     }
 
     if ctx.dry_run {
