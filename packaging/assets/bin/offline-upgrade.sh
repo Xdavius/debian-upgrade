@@ -38,12 +38,12 @@ report_status_line() {
         if [ "${percent}" -gt 100 ]; then percent=100; fi
         plymouth_progress "${percent}"
         if [ -n "${message}" ]; then
-          plymouth_message "Progression: ${percent}% | ${message}"
+          plymouth_message "$(printf 'Progression: %s%%\nPaquet: %s' "${percent}" "${message}")"
         else
           plymouth_message "Progression: ${percent}%"
         fi
       elif [ -n "${message}" ]; then
-        plymouth_message "${message}"
+        plymouth_message "$(printf 'Progression: --%%\nPaquet: %s' "${message}")"
       fi
       ;;
   esac
