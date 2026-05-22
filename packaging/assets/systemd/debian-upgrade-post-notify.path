@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for user session bus to deliver Debian post-upgrade notification
+Documentation=https://github.com/Xdavius/debian-upgrade
+
+[Path]
+PathExistsGlob=/run/user/*/bus
+Unit=debian-upgrade-post-notify.service
+
+[Install]
+WantedBy=multi-user.target

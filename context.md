@@ -258,6 +258,31 @@ Responsabilités:
   - Hauteur fenetre principale augmentee (`620px` -> `700px`) pour garder les boutons visibles.
 - Upgrade-core execution reelle:
   - `DisableThirdParty`: desactivation effective des fichiers tiers `.list/.sources` (hors `debian.sources`) via renommage `*.disabled-by-debian-upgrade` en mode normal.
+
+### 2026-05-22
+
+- Workflow offline en 2 phases consolide:
+  - phase 1 `upgrade` puis phase 2 `dkms` conditionnelle (uniquement si liste DKMS presente et phase1 OK).
+  - etat de phase persiste dans `/var/lib/debian-upgrade/offline-phase` avec marqueurs de progression.
+- Nettoyage APT post-succes ajuste:
+  - ajout de `apt-get clean` apres succes de la phase upgrade.
+  - suppression de la logique `autopurge` optionnelle.
+- DKMS phase 2 renforcee:
+  - en cas d'echec `dkms install`, tentative automatique `dkms remove -m <module> -v <version>` (sans `--all`).
+  - comptage des suppressions DKMS reussies/en echec trace.
+- Statut post-upgrade ajoute:
+  - ecriture de `/var/lib/debian-upgrade/post-upgrade-status.env` (resultat, compteurs DKMS, modules en echec).
+  - creation de `/var/lib/debian-upgrade/post-upgrade-notify.pending`.
+- Notification post-upgrade utilisateur ajoutee (sans GUI):
+  - nouveau script root `check-post-upgrade-notify.sh` (envoi desktop via DBus de session).
+  - notification toujours en criticite `critical`.
+  - action utilisateur `Lire le journal detaille` ouvrant `/var/log/debian-upgrade-offline.log`.
+  - notification consideree "traitee" uniquement si clic action; sinon rappel au reboot/connexion.
+  - message DKMS enrichi: nombre d'echecs + liste des modules en echec (noms seuls, un module par ligne) + resultat du nettoyage auto.
+- Integration systemd/package:
+  - ajout `debian-upgrade-post-notify.service`.
+  - remplacement du timer post-upgrade par `debian-upgrade-post-notify.path` (declenchement a l'arrivee d'une session utilisateur via `/run/user/*/bus`).
+  - mise a jour `packaging/pacstall/debian-upgrade.pacscript` pour installer/activer le `.path`.
   - `PreparePackages`: execution effective de `apt-get clean`, `apt-get update`, puis `apt-get --download-only dist-upgrade` en mode non interactif.
   - Nouvelle commande `DryRunUpgrade`: execution de `apt-get -s dist-upgrade` en mode non interactif.
 - Optimisation build release:
@@ -316,7 +341,7 @@ Responsabilités:
   - `upgrade-core/src/lib.rs` (y compris fonctions publiques et test unitaire local).
 - Verification post-modification: `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
 - Refonte de la desactivation des depots tiers (sans renommage de fichiers) dans `upgrade-core`:
-  - Fichiers `.list` (et tolerance `.lsit`): les lignes actives commencant par `deb` ou `deb-src` sont commentees.
+  - Fichiers `.list`: les lignes actives commencant par `deb` ou `deb-src` sont commentees.
   - Fichiers `.sources` (deb822): chaque entree de depot est forcee en `Enabled: no`;
     - si `Enabled` existe deja: valeur remplacee par `no`,
     - si `Enabled` est absente: ligne `Enabled: no` ajoutee pour l'entree.
@@ -640,3 +665,236 @@ Responsabilités:
   - raison: en mode offline, les paquets sont deja prepares en amont; on evite toute dependance reseau au reboot.
   - message Plymouth ajuste: "application des paquets prepares".
   - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Ajout d'un theme Plymouth custom "debian-upgrade" + outillage de bascule/restauration:
+  - nouveaux fichiers theme:
+    - `packaging/assets/plymouth/debian-upgrade/debian-upgrade.plymouth`
+    - `packaging/assets/plymouth/debian-upgrade/debian-upgrade.script`
+  - nouveaux scripts utilitaires:
+    - `packaging/assets/bin/enable-upgrade-plymouth.sh`:
+      - sauvegarde le theme courant dans `/var/lib/debian-upgrade/plymouth-theme.before`,
+      - active `debian-upgrade` via `plymouth-set-default-theme -R`.
+    - `packaging/assets/bin/restore-upgrade-plymouth.sh`:
+      - restaure le theme precedent depuis le fichier d'etat,
+      - nettoie l'etat apres restauration.
+  - `pacscript` mis a jour:
+    - dependance `plymouth` ajoutee,
+    - installation des scripts et du theme dans le package.
+  - validation: `bash -n` OK sur scripts offline + enable/restore.
+- Flow Plymouth auto-restauration: ajout de la restauration du theme precedent directement en fin de `offline-upgrade.sh`.
+  - comportement:
+    - si `/usr/local/lib/debian-upgrade/restore-upgrade-plymouth.sh` existe/executable, il est appele apres `dist-upgrade`.
+    - en cas d'echec de restauration, log seulement (non bloquant pour la fin d'upgrade/reboot).
+  - objectif: le theme custom ne persiste pas apres la phase offline.
+  - validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Branchement activation auto du theme Plymouth dans le flow normal:
+  - fichier: `backend-cli/src/main.rs` (`run_agent_arm_and_reboot`).
+  - avant l'armement offline/reboot, appel de `/usr/local/lib/debian-upgrade/enable-upgrade-plymouth.sh` si present/executable.
+  - appel non bloquant (`|| true`) pour ne pas casser l'upgrade si Plymouth indisponible.
+  - la restauration reste geree en fin de `offline-upgrade.sh`.
+  - validation: `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+
+### 2026-05-22
+
+- Retrait complet du theme Plymouth custom; le flux offline conserve uniquement le mecanisme `system-update` standard.
+- Simplification de `packaging/assets/bin/offline-upgrade.sh`:
+  - suppression des fonctions/messages/progression `plymouth`;
+  - suppression de l'appel de restauration de theme `restore-upgrade-plymouth.sh`.
+- Simplification de l'armement backend (`backend-cli/src/main.rs`, commande agent `arm-and-reboot`):
+  - suppression de l'appel `enable-upgrade-plymouth.sh`;
+  - conservation de l'armement `system-update.target.wants` + marker `/system-update` + reboot.
+- Nettoyage packaging Pacstall (`packaging/pacstall/debian-upgrade.pacscript`):
+  - suppression de la dependance `plymouth`;
+  - suppression de l'installation des scripts `enable/restore-upgrade-plymouth.sh`;
+  - suppression de l'installation des assets de theme Plymouth.
+- Suppression des fichiers devenus inutiles:
+  - `packaging/assets/bin/enable-upgrade-plymouth.sh`
+  - `packaging/assets/bin/restore-upgrade-plymouth.sh`
+  - `packaging/assets/plymouth/debian-upgrade/debian-upgrade.plymouth`
+  - `packaging/assets/plymouth/debian-upgrade/debian-upgrade.script`
+- Validation post-changement:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+- Bascule operationnelle demandee vers le flux offline standard `system-update` avec progression Plymouth native (sans theme custom):
+  - `packaging/assets/bin/offline-upgrade.sh` enrichi avec parsing `APT::Status-Fd` (`pmstatus`) pour remonter progression + message via:
+    - `plymouth system-update --progress=...`
+    - `plymouth message --text=...`
+  - commande offline alignee:
+    - `apt-get full-upgrade -y` avec `Dpkg::Use-Pty=0`, `Dpkg::Progress-Fancy=0`, `APT::Status-Fd=3`, options non interactives dpkg.
+  - garde-fou conserve: validation du marker `/system-update -> /var/lib/system-update`, puis suppression tres tot du marker pour eviter boucle de boot.
+  - fin de script: message final Plymouth puis `systemctl reboot`.
+- Unite systemd offline ajustee pour ce flux:
+  - fichier `packaging/assets/systemd/debian-upgrade-offline.service`.
+  - suppression de `SuccessAction`/`FailureAction` pour eviter double mecanisme de reboot (le reboot est gere par le script).
+  - ordre d'execution explicite: `After=local-fs.target plymouth-start.service system-update-pre.target` et `Before=display-manager.service system-update.target`.
+- Validation post-modification:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p backend-cli -p frontend-gui -p upgrade-core` OK.
+  - `systemd-analyze verify` non executable dans le sandbox courant (`SO_PASSCRED failed: Operation not permitted`).
+- Reorientation persistance depots tiers (demande utilisateur):
+  - abandon de la logique basee sur la session utilisateur pour la restauration post-upgrade.
+  - nouvelle source d'etat root: `/var/lib/debian-upgrade/third-party-backup/sources.list.d`.
+- `upgrade-core` (`DisableThirdParty`) enrichi:
+  - avant desactivation effective d'un fichier tiers modifie, sauvegarde de son contenu original dans le backup root (`/var/lib/debian-upgrade/...`).
+  - restauration ciblee possible uniquement pour les fichiers reellement modifies par l'outil.
+- `offline-upgrade.sh` enrichi:
+  - ajout d'une restauration automatique best-effort des depots tiers en fin d'upgrade depuis le backup root vers `/etc/apt/sources.list.d`.
+  - en cas d'echec de restauration: log non bloquant, le workflow de reboot continue.
+- Validation post-modifications:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement suite revue: abandon du mecanisme backup/restore full-file des depots tiers (risque d'ecrasement de modifications intermediaires).
+- Nouvelle strategie de reactivation ciblee par marqueurs + journal d'actions root:
+  - `upgrade-core` desactive maintenant les lignes `.list` avec prefixe marqueur `# debian-upgrade-disabled ...`.
+  - pour `.sources`, insertion d'un marqueur de stanza `# debian-upgrade-disabled-enabled` puis `Enabled: no` uniquement sur les entrees modifiees.
+  - journal d'actions ecrit dans `/var/lib/debian-upgrade/third-party-actions.log` (tracabilite root des changements, y compris resume des entrees deja desactivees avant upgrade).
+- `offline-upgrade.sh` reactivation auto adaptee:
+  - `.list`: retrait du prefixe marqueur pour decommenter uniquement les lignes desactivees par l'outil.
+  - `.sources`: suppression du marqueur et bascule ciblee vers `Enabled: yes` sur les entrees marquees.
+  - ajout d'une trace de reactivation dans `/var/lib/debian-upgrade/third-party-actions.log`.
+- Validation post-modification:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Correctif de robustesse de l'unite offline `debian-upgrade-offline.service` (suite doute fonctionnel):
+  - alignement sur un schema plus canonique `system-update.target`:
+    - `Requires=sysinit.target`
+    - `After=sysinit.target system-update-pre.target`
+    - `Before=system-update.target shutdown.target`
+    - `Conflicts=shutdown.target`
+  - gestion du reboot confiee a systemd via l'unite:
+    - `SuccessAction=reboot`
+    - `FailureAction=reboot`
+- Ajustement script offline associe:
+  - suppression du `systemctl reboot` final dans `offline-upgrade.sh` pour eviter le double mecanisme de redemarrage.
+  - message Plymouth final ajuste: `Mise a niveau Debian: terminee`.
+- Validation post-correctif:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Realignement unite offline selon proposition utilisateur (mode simple `system-update.target`):
+  - `packaging/assets/systemd/debian-upgrade-offline.service` ajuste vers:
+    - `DefaultDependencies=no`
+    - `ConditionPathExists=/system-update`
+    - `After=local-fs.target plymouth-start.service`
+    - `Before=display-manager.service`
+    - `WantedBy=system-update.target`
+  - retrait des directives ajoutees precedemment (`Requires/Conflicts/SuccessAction/FailureAction`).
+- Coherence reboot restauree cote script:
+  - `packaging/assets/bin/offline-upgrade.sh` remet `systemctl reboot` en fin de process.
+- Validation post-ajustement:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement UX GUI des messages d'etat (demande utilisateur):
+  - message de session clarifie: `Session sauvegardee (config utilisateur)` remplace par `Preferences UI sauvegardees (selection des depots tiers)`.
+  - pendant fallback privilegie de l'etape `prepare-packages`, le header n'affiche plus `Elevation privilegiee...` mais `Preparation des paquets en cours...` pour rester coherent avec l'action percue.
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement UX Plymouth offline (retour test utilisateur):
+  - durcissement du parsing `%` des lignes `pmstatus` (support decimal `.` et `,`, suppression espaces) pour eviter perte de progression.
+  - message Plymouth enrichi avec pourcentage explicite a chaque evenement `pmstatus`:
+    - format: `Progression: <n>% | <message paquet>`.
+  - objectif: rendre visible la progression meme si le theme ne dessine pas de barre native.
+- Validation: `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Correctif UX anti double-clic GUI:
+  - ajout d'un etat UI `action_in_progress` (Slint) pour verrouiller les boutons pendant les etapes longues.
+  - bouton `Suivant/Redemarrer` desactive tant qu'une action est en cours (sauf page 6 `Fermer`).
+  - bouton `Precedent` desactive aussi pendant execution pour eviter navigation concurrente.
+  - `frontend-gui/src/main.rs` met a jour pour activer/desactiver ce verrou autour de:
+    - `check_new_release`
+    - `validate_sources`
+    - `prepare-packages` (y compris fallback privilegie)
+    - `dry-run-upgrade` (y compris fallback privilegie)
+    - `request_reboot` (deverrouillage seulement en cas d'echec)
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Amelioration UX barre de statut GUI: ajout de couleurs par etat.
+  - `frontend-gui/ui/app.slint`: nouvelle propriete `header_status_color` appliquee au texte `Etat:`.
+  - `frontend-gui/src/main.rs`:
+    - ajout d'un mapping de tons (`Neutral`, `Running`, `Success`, `Warn`, `Error`),
+    - helper central `set_header_status(...)` qui applique texte + couleur,
+    - remplacement des mises a jour de statut pour colorer toutes les etapes principales (verification, validation, preparation, dry-run, reboot, erreurs).
+  - `apply_ui_event` colore aussi automatiquement les statuts derives des evenements backend.
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Refonte de l'indicateur d'etapes GUI (demande UX):
+  - suppression de l'affichage `Page X` dans l'en-tete (remplace par titre statique).
+  - ajout d'un stepper visuel dans la barre basse entre les boutons:
+    - 5 etapes (`Release`, `Sources`, `Paquets`, `Dry-run`, `Reboot`),
+    - rond vert pour etapes validees,
+    - rond orange pour l'etape en cours quand `action_in_progress=true`,
+    - rond vide/contour gris pour etapes futures.
+  - connecteurs entre etapes colorises selon progression.
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement fonctionnel workflow depots tiers (demande utilisateur):
+  - comportement conserve pendant upgrade: tous les depots tiers sont desactives a l'etape `disable-third-party`.
+  - reactivation post-upgrade desormais restreinte aux depots explicitement coches dans la GUI.
+- Mise en place technique:
+  - `upgrade-core`:
+    - nouvelle commande `SetThirdPartyReactivation { repos }`;
+    - ecriture root de la liste cible dans `/var/lib/debian-upgrade/third-party-reactivate.list`.
+  - `backend-cli` agent:
+    - support de la commande texte `set-third-party-reactivation <repo1,repo2,...>`.
+  - `frontend-gui` page sources:
+    - collecte des depots coches avant execution,
+    - en mode normal, envoi au backend privilegie de la sequence:
+      - `set-third-party-reactivation ...`
+      - `check-sources`
+      - `disable-third-party`
+    - logs UI clarifies vers "selectionnes pour reactivation post-upgrade".
+  - `offline-upgrade.sh`:
+    - restauration tiers filtree par `/var/lib/debian-upgrade/third-party-reactivate.list` (au lieu de tous les fichiers marques).
+- Validation:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Autotest logique demande par l'utilisateur sur la nouvelle commande de reactivation tiers (`set-third-party-reactivation`) via agent backend en dry-run.
+- Bug detecte puis corrige:
+  - parser agent (`backend-cli/src/main.rs`) ignorait les arguments apres `set-third-party-reactivation` (compteur a 0) a cause d'un `strip_prefix(' ')` apres `trim()`.
+  - correction: parsing direct de la portion restante (`trim().split(',')`).
+- Revalidation apres correctif:
+  - commande `set-third-party-reactivation antigravity,nvidia` -> `Dry-run: 2 depot(s)` (OK).
+  - sequence `set-third-party-reactivation antigravity` puis `disable-third-party` -> marqueurs `__AGENT_DONE__|ok|...` pour les deux commandes (OK).
+- Evolution workflow GUI demandee: ajout d'une page `Pilotes DKMS` entre `Sources` et `Paquets` (pas de pop-up).
+- Refactor navigation pages:
+  - pipeline principal passe a 6 etapes: `Bienvenue` -> `Sources` -> `DKMS` -> `Paquets` -> `Dry-run` -> `Reboot`.
+  - page `Aucune mise a niveau disponible` decalee en page 7.
+  - stepper bas mis a jour avec l'etape `DKMS`.
+- Backend DKMS ajoute:
+  - nouvelle commande `upgrade-core::Command::PrepareDkms` (exposee aussi dans `backend-cli` et mode `agent` via `prepare-dkms`).
+  - action `PrepareDkms`:
+    - lit `dkms status`,
+    - enregistre la liste module/version dans `/var/lib/debian-upgrade/dkms-reinstall.list`,
+    - tente des `dkms remove -m <module> -v <version> -k <kernel-courant>` pour les entrees `installed|built` du kernel courant.
+    - en dry-run: journalisation seulement.
+- GUI branchee sur cette commande:
+  - callback `run_dkms_step` ajoute,
+  - statut et logs dedies,
+  - transition vers page `Paquets` uniquement apres succes DKMS.
+- Validation post-modifs:
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Amelioration verbosite mode `--debug` GUI:
+  - logs supplementaires ajoutes sur les pages Sources, DKMS, Paquets, Dry-run et Finale.
+  - chaque etape debug annonce explicitement:
+    - le type d'execution (`dry-run`/simulation),
+    - la transition de page suivante en cas de succes.
+  - objectif: rendre le flux test debug plus lisible et moins "silencieux".
+- Validation: `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Implementation de la sequence offline en 2 phases via un seul service `system-update` (sans nouveau service):
+  - nouveau flag de phase dans `/var/lib/debian-upgrade/offline-phase` (`upgrade` ou `dkms`).
+  - marqueurs d'etat anti-boucle:
+    - `/var/lib/debian-upgrade/phase1.ok`
+    - `/var/lib/debian-upgrade/phase2.done`
+- `backend-cli` (`arm-and-reboot`) ajuste:
+  - initialise explicitement `offline-phase=upgrade` avant armement `system-update`.
+  - nettoie les marqueurs `phase1.ok`/`phase2.done` au depart.
+- `offline-upgrade.sh` refondu:
+  - phase `upgrade`:
+    - execute `apt-get full-upgrade` offline,
+    - pose `phase1.ok` si succes,
+    - declenche phase 2 uniquement si la liste DKMS (`/var/lib/debian-upgrade/dkms-reinstall.list`) existe et contient des entrees,
+    - sinon finalise directement (reactivation depots tiers + reboot normal).
+  - phase `dkms`:
+    - execute `dkms install -m <module> -v <version>` (sans `-k`) pour chaque entree de la liste,
+    - journalise total/succes/echecs,
+    - finalise ensuite (reactivation depots tiers + reboot normal).
+  - phase 2 refusee si `phase1.ok` absent.
+- Regle metier respectee:
+  - phase 2 non declenchee si phase 1 n'aboutit pas,
+  - phase 2 inutile si aucun DKMS detecte au prealable.
+- Validation post-modifs:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.

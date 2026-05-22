@@ -29,6 +29,7 @@ enum Commands {
     CheckNewRelease,
     CheckSources,
     DisableThirdParty,
+    PrepareDkms,
     PreparePackages,
     DryRunUpgrade,
     ScheduleOfflineUpgrade,
@@ -67,10 +68,21 @@ fn emit_json_stdout(event: Event) -> Result<()> {
 
 // Parse une commande texte simple pour le mode agent.
 fn parse_agent_command(line: &str) -> Option<CoreCommand> {
+    if let Some(raw) = line.trim().strip_prefix("set-third-party-reactivation") {
+        let repos = raw
+            .trim()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        return Some(CoreCommand::SetThirdPartyReactivation { repos });
+    }
     match line.trim() {
         "check-new-release" => Some(CoreCommand::CheckNewRelease),
         "check-sources" => Some(CoreCommand::CheckSources),
         "disable-third-party" => Some(CoreCommand::DisableThirdParty),
+        "prepare-dkms" => Some(CoreCommand::PrepareDkms),
         "prepare-packages" => Some(CoreCommand::PreparePackages),
         "dry-run-upgrade" => Some(CoreCommand::DryRunUpgrade),
         "schedule-offline-upgrade" => Some(CoreCommand::ScheduleOfflineUpgrade),
@@ -91,6 +103,9 @@ if [ ! -f /usr/lib/systemd/system/debian-upgrade-offline.service ]; then
   exit 1
 fi
 install -d -m 0755 /var/lib/system-update
+install -d -m 0755 /var/lib/debian-upgrade
+printf 'upgrade\n' > /var/lib/debian-upgrade/offline-phase
+rm -f /var/lib/debian-upgrade/phase1.ok /var/lib/debian-upgrade/phase2.done
 install -d -m 0755 /etc/systemd/system/system-update.target.wants
 ln -snf /usr/lib/systemd/system/debian-upgrade-offline.service \
   /etc/systemd/system/system-update.target.wants/debian-upgrade-offline.service
@@ -186,6 +201,7 @@ fn main() -> Result<()> {
         Some(Commands::CheckNewRelease) => run_command(ctx, CoreCommand::CheckNewRelease, &mut sink),
         Some(Commands::CheckSources) => run_command(ctx, CoreCommand::CheckSources, &mut sink),
         Some(Commands::DisableThirdParty) => run_command(ctx, CoreCommand::DisableThirdParty, &mut sink),
+        Some(Commands::PrepareDkms) => run_command(ctx, CoreCommand::PrepareDkms, &mut sink),
         Some(Commands::PreparePackages) => run_command(ctx, CoreCommand::PreparePackages, &mut sink),
         Some(Commands::DryRunUpgrade) => run_command(ctx, CoreCommand::DryRunUpgrade, &mut sink),
         Some(Commands::ScheduleOfflineUpgrade) => run_command(ctx, CoreCommand::ScheduleOfflineUpgrade, &mut sink),

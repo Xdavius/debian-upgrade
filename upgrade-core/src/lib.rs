@@ -1,5 +1,7 @@
 use std::fs;
 use std::io::Read;
+use std::io::Write;
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::thread;
 use std::time::Duration;
@@ -21,11 +23,13 @@ pub enum DeferPeriod {
     Month,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Command {
     CheckNewRelease,
     CheckSources,
+    SetThirdPartyReactivation { repos: Vec<String> },
     DisableThirdParty,
+    PrepareDkms,
     PreparePackages,
     DryRunUpgrade,
     ScheduleOfflineUpgrade,
@@ -70,6 +74,14 @@ pub struct ReleaseCheckResult {
     pub stable_codename: String,
     pub testing_codename: Option<String>,
 }
+
+const THIRD_PARTY_DIR: &str = "/etc/apt/sources.list.d";
+const THIRD_PARTY_STATE_DIR: &str = "/var/lib/debian-upgrade";
+const THIRD_PARTY_STATE_FILE: &str = "/var/lib/debian-upgrade/third-party-actions.log";
+const THIRD_PARTY_REACTIVATE_FILE: &str = "/var/lib/debian-upgrade/third-party-reactivate.list";
+const DKMS_STATE_FILE: &str = "/var/lib/debian-upgrade/dkms-reinstall.list";
+const DISABLED_LIST_PREFIX: &str = "# debian-upgrade-disabled ";
+const DISABLED_SOURCES_MARKER: &str = "# debian-upgrade-disabled-enabled";
 
 // Construit un événement horodaté prêt à être émis côté CLI/GUI.
 fn event(level: LogLevel, step: &'static str, state: StepState, message: impl Into<String>) -> Event {
@@ -632,21 +644,33 @@ fn run_check_sources(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>)
 }
 
 // Désactive les dépôts tiers pour sécuriser la montée de version.
-fn disable_list_repo_lines(file_path: &std::path::Path, dry_run: bool) -> Result<usize> {
+fn disable_list_repo_lines(
+    file_path: &std::path::Path,
+    dry_run: bool,
+    actions: &mut Vec<String>,
+) -> Result<(usize, usize)> {
     let content = fs::read_to_string(file_path)
         .with_context(|| format!("lecture {}", file_path.display()))?;
     let mut changed = 0usize;
+    let mut already_disabled = 0usize;
     let mut rewritten = Vec::new();
 
     for line in content.lines() {
         let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix('#') {
+            let inner = rest.trim_start();
+            if inner.starts_with("deb ") || inner == "deb" || inner.starts_with("deb-src ") || inner == "deb-src" {
+                already_disabled += 1;
+            }
+        }
         if trimmed.starts_with('#') {
             rewritten.push(line.to_string());
             continue;
         }
 
         if trimmed.starts_with("deb ") || trimmed == "deb" || trimmed.starts_with("deb-src ") || trimmed == "deb-src" {
-            rewritten.push(format!("# {line}"));
+            rewritten.push(format!("{DISABLED_LIST_PREFIX}{line}"));
+            actions.push(format!("list-comment|{}|{}", file_path.display(), line.trim()));
             changed += 1;
         } else {
             rewritten.push(line.to_string());
@@ -661,15 +685,20 @@ fn disable_list_repo_lines(file_path: &std::path::Path, dry_run: bool) -> Result
         fs::write(file_path, out).with_context(|| format!("ecriture {}", file_path.display()))?;
     }
 
-    Ok(changed)
+    Ok((changed, already_disabled))
 }
 
 // Désactive chaque entrée deb822 d'un fichier .sources via "Enabled: no".
-fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result<usize> {
+fn disable_sources_entries(
+    file_path: &std::path::Path,
+    dry_run: bool,
+    actions: &mut Vec<String>,
+) -> Result<(usize, usize)> {
     let content = fs::read_to_string(file_path)
         .with_context(|| format!("lecture {}", file_path.display()))?;
     let mut lines: Vec<String> = content.lines().map(ToString::to_string).collect();
     let mut changed = 0usize;
+    let mut already_disabled = 0usize;
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -705,14 +734,23 @@ fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result
         match enabled_idx {
             Some(idx) => {
                 if !enabled_is_no {
+                    if idx == stanza_start || lines[idx - 1].trim() != DISABLED_SOURCES_MARKER {
+                        lines.insert(idx, DISABLED_SOURCES_MARKER.to_string());
+                        i += 1;
+                    }
                     lines[idx] = "Enabled: no".to_string();
+                    actions.push(format!("sources-enabled-no|{}|stanza-start={}", file_path.display(), stanza_start));
                     changed += 1;
+                } else {
+                    already_disabled += 1;
                 }
             }
             None => {
-                lines.insert(stanza_end, "Enabled: no".to_string());
+                lines.insert(stanza_end, DISABLED_SOURCES_MARKER.to_string());
+                lines.insert(stanza_end + 1, "Enabled: no".to_string());
+                actions.push(format!("sources-enabled-added|{}|stanza-start={}", file_path.display(), stanza_start));
                 changed += 1;
-                i += 1;
+                i += 2;
             }
         }
     }
@@ -725,7 +763,92 @@ fn disable_sources_entries(file_path: &std::path::Path, dry_run: bool) -> Result
         fs::write(file_path, out).with_context(|| format!("ecriture {}", file_path.display()))?;
     }
 
-    Ok(changed)
+    Ok((changed, already_disabled))
+}
+
+// Persiste un journal root des actions de désactivation/réactivation des dépôts tiers.
+fn persist_third_party_actions(lines: &[String]) -> Result<()> {
+    let state_dir = Path::new(THIRD_PARTY_STATE_DIR);
+    fs::create_dir_all(state_dir).with_context(|| format!("creation {}", state_dir.display()))?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(THIRD_PARTY_STATE_FILE)
+        .with_context(|| format!("ouverture {}", THIRD_PARTY_STATE_FILE))?;
+    for line in lines {
+        writeln!(file, "[{}] {}", Utc::now().to_rfc3339(), line)
+            .with_context(|| format!("ecriture {}", THIRD_PARTY_STATE_FILE))?;
+    }
+    Ok(())
+}
+
+// Enregistre la liste des fichiers tiers a re-activer apres l'upgrade offline.
+fn run_set_third_party_reactivation(
+    ctx: AppContext,
+    repos: &[String],
+    emit: &mut dyn FnMut(Event) -> Result<()>,
+) -> Result<()> {
+    let step = "set-third-party-reactivation";
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Running,
+        "Enregistrement des depots tiers a re-activer apres upgrade...",
+    ))?;
+
+    let mut cleaned: Vec<String> = repos
+        .iter()
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+        .filter(|r| !r.contains('/') && !r.contains('\0'))
+        .map(ToString::to_string)
+        .collect();
+    cleaned.sort();
+    cleaned.dedup();
+
+    if ctx.dry_run {
+        emit(event(
+            LogLevel::Warn,
+            step,
+            StepState::Done,
+            format!(
+                "Dry-run: {} depot(s) seraient memorises pour reactivation.",
+                cleaned.len()
+            ),
+        ))?;
+        return Ok(());
+    }
+
+    fs::create_dir_all(THIRD_PARTY_STATE_DIR)
+        .with_context(|| format!("creation {}", THIRD_PARTY_STATE_DIR))?;
+    let mut data = String::new();
+    if !cleaned.is_empty() {
+        data.push_str(&cleaned.join("\n"));
+        data.push('\n');
+    }
+    fs::write(THIRD_PARTY_REACTIVATE_FILE, data)
+        .with_context(|| format!("ecriture {}", THIRD_PARTY_REACTIVATE_FILE))?;
+
+    persist_third_party_actions(&[format!(
+        "set-third-party-reactivation|count={}|repos={}",
+        cleaned.len(),
+        if cleaned.is_empty() {
+            "none".to_string()
+        } else {
+            cleaned.join(",")
+        }
+    )])?;
+
+    emit(event(
+        LogLevel::Success,
+        step,
+        StepState::Done,
+        format!(
+            "Liste de reactivation enregistree ({} depot(s)).",
+            cleaned.len()
+        ),
+    ))?;
+    Ok(())
 }
 
 // Désactive les dépôts tiers pour sécuriser la montée de version.
@@ -738,7 +861,7 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         "Désactivation des sources tierces...",
     ))?;
 
-    let dir = std::path::Path::new("/etc/apt/sources.list.d");
+    let dir = Path::new(THIRD_PARTY_DIR);
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => {
@@ -754,6 +877,8 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
 
     let mut changed_files = 0usize;
     let mut changed_entries = 0usize;
+    let mut already_disabled_entries = 0usize;
+    let mut actions = Vec::<String>::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
@@ -768,15 +893,16 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             continue;
         };
-        if ext != "list" && ext != "lsit" && ext != "sources" {
+        if ext != "list" && ext != "sources" {
             continue;
         }
 
-        let changed_in_file = if ext == "sources" {
-            disable_sources_entries(&path, ctx.dry_run)?
+        let (changed_in_file, already_disabled_in_file) = if ext == "sources" {
+            disable_sources_entries(&path, ctx.dry_run, &mut actions)?
         } else {
-            disable_list_repo_lines(&path, ctx.dry_run)?
+            disable_list_repo_lines(&path, ctx.dry_run, &mut actions)?
         };
+        already_disabled_entries += already_disabled_in_file;
 
         if changed_in_file == 0 {
             continue;
@@ -809,6 +935,16 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
         }
     }
 
+    if !ctx.dry_run && !actions.is_empty() {
+        let mut action_lines = Vec::with_capacity(actions.len() + 1);
+        action_lines.push("disable-third-party|start".to_string());
+        action_lines.extend(actions);
+        action_lines.push(format!(
+            "disable-third-party|summary|changed_files={changed_files}|changed_entries={changed_entries}|already_disabled_entries={already_disabled_entries}"
+        ));
+        persist_third_party_actions(&action_lines)?;
+    }
+
     if ctx.dry_run {
         emit(event(
             LogLevel::Warn,
@@ -830,6 +966,187 @@ fn run_disable_third_party(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Resul
             ),
         ))
     }
+}
+
+#[derive(Debug, Clone)]
+struct DkmsEntry {
+    module: String,
+    version: String,
+    kernel: Option<String>,
+    status: String,
+}
+
+fn parse_dkms_status_line(line: &str) -> Option<DkmsEntry> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (left, status) = trimmed.rsplit_once(':')?;
+    let status = status.trim().to_string();
+
+    let (module_ver, maybe_kernel) = match left.split_once(',') {
+        Some((a, b)) => (a.trim(), Some(b.trim().to_string())),
+        None => (left.trim(), None),
+    };
+    let (module, version) = module_ver.split_once('/')?;
+    Some(DkmsEntry {
+        module: module.trim().to_string(),
+        version: version.trim().to_string(),
+        kernel: maybe_kernel.filter(|k| !k.is_empty()),
+        status,
+    })
+}
+
+fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
+    let step = "prepare-dkms";
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Running,
+        "Preparation des pilotes DKMS avant upgrade...",
+    ))?;
+
+    let output = ProcessCommand::new("dkms").arg("status").output();
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        Ok(_) => {
+            emit(event(
+                LogLevel::Warn,
+                step,
+                StepState::Done,
+                "dkms status indisponible ou en echec; etape DKMS ignoree.",
+            ))?;
+            return Ok(());
+        }
+        Err(_) => {
+            emit(event(
+                LogLevel::Warn,
+                step,
+                StepState::Done,
+                "Commande dkms introuvable; etape DKMS ignoree.",
+            ))?;
+            return Ok(());
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let entries: Vec<DkmsEntry> = stdout
+        .lines()
+        .filter_map(parse_dkms_status_line)
+        .collect();
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Pending,
+        format!("dkms status: {} entree(s) parsee(s).", entries.len()),
+    ))?;
+    if entries.is_empty() {
+        emit(event(
+            LogLevel::Info,
+            step,
+            StepState::Done,
+            "Aucun module DKMS detecte.",
+        ))?;
+        return Ok(());
+    }
+
+    let mut unique_modvers = Vec::<(String, String)>::new();
+    for e in &entries {
+        let key = (e.module.clone(), e.version.clone());
+        if !unique_modvers.iter().any(|k| k == &key) {
+            unique_modvers.push(key);
+        }
+    }
+    if ctx.debug {
+        for e in &entries {
+            emit(event(
+                LogLevel::Debug,
+                step,
+                StepState::Pending,
+                format!(
+                    "Module detecte: {}/{} kernel={} status={}",
+                    e.module,
+                    e.version,
+                    e.kernel.clone().unwrap_or_else(|| "-".to_string()),
+                    e.status
+                ),
+            ))?;
+        }
+    }
+
+    if ctx.dry_run {
+        emit(event(
+            LogLevel::Warn,
+            step,
+            StepState::Done,
+            format!(
+                "Dry-run: {} module(s) DKMS detecte(s), aucun retrait effectif (liste non ecrite).",
+                unique_modvers.len()
+            ),
+        ))?;
+        return Ok(());
+    }
+
+    fs::create_dir_all(THIRD_PARTY_STATE_DIR)
+        .with_context(|| format!("creation {}", THIRD_PARTY_STATE_DIR))?;
+    let mut list = String::new();
+    for (m, v) in &unique_modvers {
+        list.push_str(&format!("{m},{v}\n"));
+    }
+    fs::write(DKMS_STATE_FILE, list)
+        .with_context(|| format!("ecriture {}", DKMS_STATE_FILE))?;
+    emit(event(
+        LogLevel::Info,
+        step,
+        StepState::Pending,
+        format!(
+            "Liste DKMS a reinstaller enregistree dans {} ({} module(s)).",
+            DKMS_STATE_FILE,
+            unique_modvers.len()
+        ),
+    ))?;
+
+    let running_kernel = ProcessCommand::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None });
+
+    let mut removed = 0usize;
+    if let Some(rk) = running_kernel {
+        for e in &entries {
+            if e.kernel.as_deref() == Some(rk.as_str())
+                && (e.status.contains("installed") || e.status.contains("built"))
+            {
+                let status = ProcessCommand::new("dkms")
+                    .arg("remove")
+                    .arg("-m")
+                    .arg(&e.module)
+                    .arg("-v")
+                    .arg(&e.version)
+                    .arg("-k")
+                    .arg(&rk)
+                    .status();
+                if let Ok(s) = status {
+                    if s.success() {
+                        removed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    emit(event(
+        LogLevel::Success,
+        step,
+        StepState::Done,
+        format!(
+            "Preparation DKMS terminee: {} module(s) detecte(s), {} suppression(s) sur kernel courant.",
+            unique_modvers.len(),
+            removed
+        ),
+    ))?;
+    Ok(())
 }
 
 // Prépare les paquets nécessaires (clean, update, download-only dist-upgrade).
@@ -1075,7 +1392,9 @@ pub fn run_command(ctx: AppContext, command: Command, emit: &mut dyn FnMut(Event
             Ok(())
         }
         Command::CheckSources => run_check_sources(ctx, emit),
+        Command::SetThirdPartyReactivation { repos } => run_set_third_party_reactivation(ctx, &repos, emit),
         Command::DisableThirdParty => run_disable_third_party(ctx, emit),
+        Command::PrepareDkms => run_prepare_dkms(ctx, emit),
         Command::PreparePackages => run_prepare_packages(ctx, emit),
         Command::DryRunUpgrade => run_dry_run_upgrade(ctx, emit),
         Command::ScheduleOfflineUpgrade => run_schedule_offline_upgrade(ctx, emit),
