@@ -1116,7 +1116,7 @@ fn main() -> Result<(), slint::PlatformError> {
                 move || {
                     if let Some(app) = ui.upgrade() {
                         app.set_action_in_progress(true);
-                        set_header_status(&app, "Test dry-run upgrade en cours", StatusTone::Running);
+                        set_header_status(&app, "Simulation en cours...", StatusTone::Running);
                         append_log(&app, "[info] Simulation du test de mise a niveau...");
                         append_log(&app, "[debug] Commande cible future: apt-get -s dist-upgrade");
                         if mode.debug {
@@ -1154,7 +1154,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                 if mode.debug {
                                     append_log(&app, "[debug] Dry-run OK -> transition vers page 6 (Mise a niveau finale).");
                                 }
-                                set_header_status(&app, "Dry-run valide", StatusTone::Success);
+                                set_header_status(&app, "Simulation terminee", StatusTone::Success);
                                 app.set_current_page(6);
                             }
                             Err(err) => {
@@ -1187,7 +1187,7 @@ fn main() -> Result<(), slint::PlatformError> {
                                                 app.set_action_in_progress(false);
                                                 match privileged {
                                                     Ok(()) => {
-                                                        set_header_status(&app, "Dry-run valide", StatusTone::Success);
+                                                        set_header_status(&app, "Simulation terminee", StatusTone::Success);
                                                         app.set_current_page(6);
                                                     }
                                                     Err(p_err) => {

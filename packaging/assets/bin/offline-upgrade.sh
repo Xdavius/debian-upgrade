@@ -87,7 +87,7 @@ report_status_line() {
   local line="$1"
   case "${line}" in
     pmstatus:*)
-      local percent_raw message percent normalized
+      local percent_raw message percent normalized stable_msg package_line
       percent_raw="$(printf '%s\n' "${line}" | cut -d: -f3)"
       message="$(printf '%s\n' "${line}" | cut -d: -f4-)"
       normalized="$(printf '%s' "${percent_raw}" | tr ',' '.' | tr -d '[:space:]')"
@@ -97,12 +97,15 @@ report_status_line() {
         if [ "${percent}" -gt 100 ]; then percent=100; fi
         plymouth_progress "${percent}"
         if [ -n "${message}" ]; then
-          plymouth_message "$(printf 'Progression: %s%%\nPaquet: %s' "${percent}" "${message}")"
+          package_line="$(printf '%.72s' "${message}")"
+          stable_msg="$(printf 'Progression: %3d%%\nPaquet: %-72s' "${percent}" "${package_line}")"
+          plymouth_message "${stable_msg}"
         else
-          plymouth_message "Progression: ${percent}%"
+          plymouth_message "$(printf 'Progression: %3d%%' "${percent}")"
         fi
       elif [ -n "${message}" ]; then
-        plymouth_message "$(printf 'Progression: --%%\nPaquet: %s' "${message}")"
+        package_line="$(printf '%.72s' "${message}")"
+        plymouth_message "$(printf 'Progression: --%%\nPaquet: %-72s' "${package_line}")"
       fi
       ;;
   esac
