@@ -1132,14 +1132,12 @@ fn main() -> Result<(), slint::PlatformError> {
                     dry_run: mode.debug,
                     debug: mode.debug,
                 };
+                let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
+                let scheduled = Arc::new(AtomicBool::new(false));
+
                 let mut publish = |evt: CoreEvent| {
                     let ui_evt = core_to_ui_event(evt);
-                    let ui_clone = ui.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(app) = ui_clone.upgrade() {
-                            apply_ui_event(&app, ui_evt);
-                        }
-                    });
+                    publish_ui_event_batched(&ui, &pending, &scheduled, ui_evt);
                     Ok(())
                 };
                 let result = run_command(ctx, CoreCommand::DryRunUpgrade, &mut publish);
