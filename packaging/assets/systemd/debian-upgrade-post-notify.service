@@ -1,0 +1,9 @@
+[Unit]
+Description=Debian Upgrade post-upgrade notifier
+Documentation=https://github.com/Xdavius/debian-upgrade
+After=systemd-logind.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/lib/debian-upgrade/check-post-upgrade-notify.sh

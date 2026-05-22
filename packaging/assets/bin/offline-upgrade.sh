@@ -15,9 +15,37 @@ THIRD_PARTY_TARGET_DIR="${OFFLINE_UPGRADE_THIRD_PARTY_TARGET_DIR:-${ROOT_PREFIX}
 SYSTEM_UPDATE_LINK="${OFFLINE_UPGRADE_SYSTEM_UPDATE_LINK:-${ROOT_PREFIX}/system-update}"
 ETC_SYSTEM_UPDATE_LINK="${OFFLINE_UPGRADE_ETC_SYSTEM_UPDATE_LINK:-${ROOT_PREFIX}/etc/system-update}"
 OFFLINE_SIMULATE="${OFFLINE_UPGRADE_SIMULATE:-0}"
+POST_UPGRADE_STATUS_FILE="${OFFLINE_UPGRADE_POST_UPGRADE_STATUS_FILE:-${STATE_DIR}/post-upgrade-status.env}"
+POST_UPGRADE_PENDING_FILE="${OFFLINE_UPGRADE_POST_UPGRADE_PENDING_FILE:-${STATE_DIR}/post-upgrade-notify.pending}"
 
 log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >>"${LOG_FILE}"
+}
+
+write_post_upgrade_status() {
+  local result="$1"
+  local phase="$2"
+  local dkms_total="$3"
+  local dkms_ok="$4"
+  local dkms_ko="$5"
+  local dkms_remove_ok="${6:-0}"
+  local dkms_remove_ko="${7:-0}"
+  local dkms_failed_modules="${8:-}"
+
+  install -d -m 0755 "${STATE_DIR}"
+  {
+    printf 'timestamp=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    printf 'result=%s\n' "${result}"
+    printf 'phase=%s\n' "${phase}"
+    printf 'dkms_total=%s\n' "${dkms_total}"
+    printf 'dkms_ok=%s\n' "${dkms_ok}"
+    printf 'dkms_ko=%s\n' "${dkms_ko}"
+    printf 'dkms_remove_ok=%s\n' "${dkms_remove_ok}"
+    printf 'dkms_remove_ko=%s\n' "${dkms_remove_ko}"
+    printf 'dkms_failed_modules=%s\n' "${dkms_failed_modules}"
+  } > "${POST_UPGRADE_STATUS_FILE}"
+  touch "${POST_UPGRADE_PENDING_FILE}"
+  log "Etat post-upgrade ecrit: result=${result}, phase=${phase}, dkms_total=${dkms_total}, dkms_ok=${dkms_ok}, dkms_ko=${dkms_ko}, dkms_remove_ok=${dkms_remove_ok}, dkms_remove_ko=${dkms_remove_ko}, dkms_failed_modules=${dkms_failed_modules}."
 }
 
 run_reboot() {
@@ -26,6 +54,19 @@ run_reboot() {
     return 0
   fi
   systemctl reboot
+}
+
+run_post_success_apt_clean() {
+  log "Nettoyage cache APT apres succes upgrade (apt clean)."
+  if [ "${OFFLINE_SIMULATE}" = "1" ]; then
+    log "SIMULATE: apt-get clean"
+    return 0
+  fi
+  if apt-get clean >>"${LOG_FILE}" 2>&1; then
+    log "apt clean termine avec succes."
+  else
+    log "apt clean en echec (non bloquant)."
+  fi
 }
 
 plymouth_progress() {
@@ -168,7 +209,7 @@ run_phase_upgrade() {
     report_status_line "pmstatus:simulated:35.0000:Installing simulated-package"
     report_status_line "pmstatus:simulated:78.0000:Configuring simulated-package"
   else
-    apt-get \
+    if ! apt-get \
       -y \
       -o Dpkg::Use-Pty=0 \
       -o Dpkg::Progress-Fancy=0 \
@@ -182,11 +223,16 @@ run_phase_upgrade() {
           report_status_line "${status_line}"
           printf '%s\n' "${status_line}" >>"${LOG_FILE}"
         done
-      ) >>"${LOG_FILE}" 2>&1
+      ) >>"${LOG_FILE}" 2>&1; then
+      log "Echec phase upgrade (apt full-upgrade)."
+      write_post_upgrade_status "failed_upgrade" "upgrade" "0" "0" "0" "0" "0" ""
+      return 1
+    fi
   fi
 
   touch "${PHASE1_OK_FILE}"
   log "Phase upgrade terminee avec succes."
+  run_post_success_apt_clean
 
   if has_dkms_entries; then
     log "Liste DKMS detectee: planification phase 2."
@@ -195,6 +241,7 @@ run_phase_upgrade() {
   fi
 
   log "Aucune phase DKMS requise, finalisation immediate."
+  write_post_upgrade_status "success" "upgrade" "0" "0" "0" "0" "0" ""
   restore_third_party_repos || log "Restauration depots tiers echouee (non bloquant)"
   rm -f "${PHASE_FILE}" "${PHASE1_OK_FILE}" "${PHASE2_DONE_FILE}"
   plymouth_progress 100
@@ -227,6 +274,9 @@ run_phase_dkms() {
   local total=0
   local ok=0
   local ko=0
+  local remove_ok=0
+  local remove_ko=0
+  local failed_modules=""
   while IFS=, read -r module version; do
     module="$(printf '%s' "${module}" | xargs)"
     version="$(printf '%s' "${version}" | xargs)"
@@ -245,10 +295,31 @@ run_phase_dkms() {
     else
       ko=$((ko + 1))
       log "DKMS ECHEC ${module}/${version}"
+      if [ -n "${failed_modules}" ]; then
+        failed_modules="${failed_modules},${module}"
+      else
+        failed_modules="${module}"
+      fi
+      if [ "${OFFLINE_SIMULATE}" = "1" ]; then
+        log "SIMULATE: dkms remove -m ${module} -v ${version}"
+      else
+        if dkms remove -m "${module}" -v "${version}" >>"${LOG_FILE}" 2>&1; then
+          log "DKMS remove apres echec OK ${module}/${version}"
+          remove_ok=$((remove_ok + 1))
+        else
+          log "DKMS remove apres echec ECHEC ${module}/${version}"
+          remove_ko=$((remove_ko + 1))
+        fi
+      fi
     fi
   done < "${DKMS_REINSTALL_FILE}"
 
   log "Phase DKMS terminee: total=${total}, ok=${ok}, ko=${ko}."
+  if [ "${ko}" -gt 0 ]; then
+    write_post_upgrade_status "partial_dkms" "dkms" "${total}" "${ok}" "${ko}" "${remove_ok}" "${remove_ko}" "${failed_modules}"
+  else
+    write_post_upgrade_status "success_dkms" "dkms" "${total}" "${ok}" "0" "0" "0" ""
+  fi
   restore_third_party_repos || log "Restauration depots tiers echouee (non bloquant)"
   touch "${PHASE2_DONE_FILE}"
   rm -f "${PHASE_FILE}" "${PHASE1_OK_FILE}"

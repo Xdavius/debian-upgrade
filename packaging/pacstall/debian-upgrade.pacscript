@@ -58,15 +58,24 @@ package() {
     "${pkgdir}/usr/local/lib/debian-upgrade/offline-upgrade.sh"
   install -Dm755 "packaging/assets/bin/check-upgrade-notify.sh" \
     "${pkgdir}/usr/local/lib/debian-upgrade/check-upgrade-notify.sh"
+  install -Dm755 "packaging/assets/bin/check-post-upgrade-notify.sh" \
+    "${pkgdir}/usr/local/lib/debian-upgrade/check-post-upgrade-notify.sh"
   install -Dm644 "packaging/assets/systemd/debian-upgrade-offline.service" \
     "${pkgdir}/usr/lib/systemd/system/debian-upgrade-offline.service"
   install -Dm644 "packaging/assets/systemd/debian-upgrade-notify.service" \
     "${pkgdir}/usr/lib/systemd/system/debian-upgrade-notify.service"
   install -Dm644 "packaging/assets/systemd/debian-upgrade-notify.timer" \
     "${pkgdir}/usr/lib/systemd/system/debian-upgrade-notify.timer"
+  install -Dm644 "packaging/assets/systemd/debian-upgrade-post-notify.service" \
+    "${pkgdir}/usr/lib/systemd/system/debian-upgrade-post-notify.service"
+  install -Dm644 "packaging/assets/systemd/debian-upgrade-post-notify.path" \
+    "${pkgdir}/usr/lib/systemd/system/debian-upgrade-post-notify.path"
   install -d "${pkgdir}/usr/lib/systemd/system/timers.target.wants"
   ln -s ../debian-upgrade-notify.timer \
     "${pkgdir}/usr/lib/systemd/system/timers.target.wants/debian-upgrade-notify.timer"
+  install -d "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants"
+  ln -s ../debian-upgrade-post-notify.path \
+    "${pkgdir}/usr/lib/systemd/system/multi-user.target.wants/debian-upgrade-post-notify.path"
   install -Dm644 "packaging/assets/desktop/debian-upgrade.desktop" \
     "${pkgdir}/usr/share/applications/debian-upgrade.desktop"
 }
@@ -75,5 +84,6 @@ post_install() {
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
     systemctl enable --now debian-upgrade-notify.timer || true
+    systemctl enable --now debian-upgrade-post-notify.path || true
   fi
 }

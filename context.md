@@ -258,6 +258,31 @@ Responsabilités:
   - Hauteur fenetre principale augmentee (`620px` -> `700px`) pour garder les boutons visibles.
 - Upgrade-core execution reelle:
   - `DisableThirdParty`: desactivation effective des fichiers tiers `.list/.sources` (hors `debian.sources`) via renommage `*.disabled-by-debian-upgrade` en mode normal.
+
+### 2026-05-22
+
+- Workflow offline en 2 phases consolide:
+  - phase 1 `upgrade` puis phase 2 `dkms` conditionnelle (uniquement si liste DKMS presente et phase1 OK).
+  - etat de phase persiste dans `/var/lib/debian-upgrade/offline-phase` avec marqueurs de progression.
+- Nettoyage APT post-succes ajuste:
+  - ajout de `apt-get clean` apres succes de la phase upgrade.
+  - suppression de la logique `autopurge` optionnelle.
+- DKMS phase 2 renforcee:
+  - en cas d'echec `dkms install`, tentative automatique `dkms remove -m <module> -v <version>` (sans `--all`).
+  - comptage des suppressions DKMS reussies/en echec trace.
+- Statut post-upgrade ajoute:
+  - ecriture de `/var/lib/debian-upgrade/post-upgrade-status.env` (resultat, compteurs DKMS, modules en echec).
+  - creation de `/var/lib/debian-upgrade/post-upgrade-notify.pending`.
+- Notification post-upgrade utilisateur ajoutee (sans GUI):
+  - nouveau script root `check-post-upgrade-notify.sh` (envoi desktop via DBus de session).
+  - notification toujours en criticite `critical`.
+  - action utilisateur `Lire le journal detaille` ouvrant `/var/log/debian-upgrade-offline.log`.
+  - notification consideree "traitee" uniquement si clic action; sinon rappel au reboot/connexion.
+  - message DKMS enrichi: nombre d'echecs + liste des modules en echec (noms seuls, un module par ligne) + resultat du nettoyage auto.
+- Integration systemd/package:
+  - ajout `debian-upgrade-post-notify.service`.
+  - remplacement du timer post-upgrade par `debian-upgrade-post-notify.path` (declenchement a l'arrivee d'une session utilisateur via `/run/user/*/bus`).
+  - mise a jour `packaging/pacstall/debian-upgrade.pacscript` pour installer/activer le `.path`.
   - `PreparePackages`: execution effective de `apt-get clean`, `apt-get update`, puis `apt-get --download-only dist-upgrade` en mode non interactif.
   - Nouvelle commande `DryRunUpgrade`: execution de `apt-get -s dist-upgrade` en mode non interactif.
 - Optimisation build release:
