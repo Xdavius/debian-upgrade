@@ -840,6 +840,26 @@ Responsabilités:
     - restauration tiers filtree par `/var/lib/debian-upgrade/third-party-reactivate.list` (au lieu de tous les fichiers marques).
 - Validation:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Ajustement UX navigation (demande utilisateur):
+  - en mode normal, le bouton `Precedent` n'est plus affiche.
+  - le bouton `Precedent` reste visible uniquement en mode debug.
+  - implementation:
+    - `frontend-gui/ui/app.slint`: ajout de la propriete `debug_mode` et condition `visible/enabled` sur le bouton.
+    - `frontend-gui/src/main.rs`: `app.set_debug_mode(mode.debug)` a l'initialisation.
+- Validation:
+  - `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Ajustement securite mode debug (demande utilisateur):
+  - `upgrade-core` (`prepare-packages`) n'applique plus le pin APT si `--debug` est actif.
+  - un message explicite est emis: mode debug => pin non applique (evite toute mutation APT involontaire en debug).
+- Validation:
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Bump version projet vers `2.1.0`:
+  - `backend-cli/Cargo.toml` -> `version = "2.1.0"`.
+  - `frontend-gui/Cargo.toml` -> `version = "2.1.0"`.
+  - `upgrade-core/Cargo.toml` -> `version = "2.1.0"`.
+  - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="2.1.0"`.
+- Validation:
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
   - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
 - Autotest logique demande par l'utilisateur sur la nouvelle commande de reactivation tiers (`set-third-party-reactivation`) via agent backend en dry-run.
 - Bug detecte puis corrige:
@@ -898,3 +918,27 @@ Responsabilités:
 - Validation post-modifs:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
   - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement APT demande utilisateur pour mieux gerer les downgrades/holds pendant la migration majeure:
+  - `upgrade-core` (`prepare-packages`):
+    - ajout d'un pin APT explicite vers le codename cible Debian dans `/etc/apt/preferences.d/99-debian-upgrade-target.pref`:
+      - `Package: *`
+      - `Pin: release n=<codename-cible>`
+      - `Pin-Priority: 1001`
+    - sauvegarde du codename cible dans `/var/lib/debian-upgrade/target-codename`.
+    - application du pin avant `apt-get update` de la phase telechargement.
+    - ajout des options `--allow-downgrades` et `--allow-change-held-packages` sur `apt-get --download-only dist-upgrade`.
+  - `upgrade-core` (`dry-run-upgrade`):
+    - ajout des options `--allow-downgrades` et `--allow-change-held-packages` sur `apt-get -s dist-upgrade`.
+  - `offline-upgrade.sh`:
+    - reapplique le pin APT au demarrage de la phase `upgrade` a partir de `/var/lib/debian-upgrade/target-codename` (si present).
+    - ajout des options `--allow-downgrades` et `--allow-change-held-packages` sur `apt-get full-upgrade`.
+- Validation:
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Ajustement finalisation pin APT (demande utilisateur):
+  - `offline-upgrade.sh` supprime maintenant systematiquement le pin APT cible en fin d'execution (succes ou echec) via un cleanup global.
+  - implementation:
+    - nouvelle fonction `cleanup_apt_target_pin` (suppression de `${APT_PIN_FILE}` si present),
+    - `trap cleanup_apt_target_pin EXIT` ajoute en initialisation du script.
+- Validation:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.

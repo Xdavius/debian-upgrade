@@ -587,6 +587,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let mode = parse_run_mode();
     let session_cfg = load_or_init_session_config(mode.debug);
     let app = create_app_window_with_backend_fallback()?;
+    app.set_debug_mode(mode.debug);
     let window = app.window();
     // Centered startup position (desktop standard 1920x1080 baseline).
     // Slint 1.5 does not expose monitor geometry directly in this API surface.

@@ -80,6 +80,8 @@ const THIRD_PARTY_STATE_DIR: &str = "/var/lib/debian-upgrade";
 const THIRD_PARTY_STATE_FILE: &str = "/var/lib/debian-upgrade/third-party-actions.log";
 const THIRD_PARTY_REACTIVATE_FILE: &str = "/var/lib/debian-upgrade/third-party-reactivate.list";
 const DKMS_STATE_FILE: &str = "/var/lib/debian-upgrade/dkms-reinstall.list";
+const TARGET_CODENAME_STATE_FILE: &str = "/var/lib/debian-upgrade/target-codename";
+const APT_TARGET_PIN_FILE: &str = "/etc/apt/preferences.d/99-debian-upgrade-target.pref";
 const DISABLED_LIST_PREFIX: &str = "# debian-upgrade-disabled ";
 const DISABLED_SOURCES_MARKER: &str = "# debian-upgrade-disabled-enabled";
 
@@ -204,6 +206,27 @@ fn run_and_report(
     } else {
         Err(anyhow!("commande en echec: {program} {}", args.join(" ")))
     }
+}
+
+fn apply_target_apt_pin(target_codename: &str, dry_run: bool) -> Result<()> {
+    let pin_content = format!(
+        "Package: *\nPin: release n={}\nPin-Priority: 1001\n",
+        target_codename
+    );
+    if dry_run {
+        return Ok(());
+    }
+    fs::create_dir_all(THIRD_PARTY_STATE_DIR)
+        .with_context(|| format!("creation dossier etat {}", THIRD_PARTY_STATE_DIR))?;
+    fs::write(TARGET_CODENAME_STATE_FILE, format!("{target_codename}\n")).with_context(|| {
+        format!(
+            "ecriture fichier codename cible {}",
+            TARGET_CODENAME_STATE_FILE
+        )
+    })?;
+    fs::write(APT_TARGET_PIN_FILE, pin_content)
+        .with_context(|| format!("ecriture pin APT {}", APT_TARGET_PIN_FILE))?;
+    Ok(())
 }
 
 // Lit /etc/os-release et retourne la version majeure + codename local.
@@ -1189,6 +1212,7 @@ fn run_prepare_dkms(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) 
 // Prépare les paquets nécessaires (clean, update, download-only dist-upgrade).
 fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()>) -> Result<()> {
     let step = "prepare-packages";
+    let (_, target_codename, _) = fetch_debian_release_info()?;
 
     emit(event(
         LogLevel::Info,
@@ -1198,11 +1222,20 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
     ))?;
 
     emit_debug(ctx, step, "Commande: apt-get clean", emit)?;
+    emit_debug(
+        ctx,
+        step,
+        format!(
+            "Pin APT cible: {} (n={})",
+            APT_TARGET_PIN_FILE, target_codename
+        ),
+        emit,
+    )?;
     emit_debug(ctx, step, "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get update", emit)?;
     emit_debug(
         ctx,
         step,
-        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true --download-only dist-upgrade",
+        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o APT::Get::Always-Include-Phased-Updates=true --allow-downgrades --allow-change-held-packages --download-only dist-upgrade",
         emit,
     )?;
 
@@ -1217,6 +1250,28 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
     }
 
     run_and_report(step, emit, "apt-get", &["clean"])?;
+    if ctx.debug {
+        emit(event(
+            LogLevel::Warn,
+            step,
+            StepState::Pending,
+            format!(
+                "Mode debug: pin APT non applique (simulation securisee) [{} -> n={}].",
+                APT_TARGET_PIN_FILE, target_codename
+            ),
+        ))?;
+    } else {
+        apply_target_apt_pin(&target_codename, false)?;
+        emit(event(
+            LogLevel::Info,
+            step,
+            StepState::Pending,
+            format!(
+                "Pin APT applique vers '{}' ({})",
+                target_codename, APT_TARGET_PIN_FILE
+            ),
+        ))?;
+    }
     run_and_report(
         step,
         emit,
@@ -1245,6 +1300,8 @@ fn run_prepare_packages(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<(
             "Dpkg::Options::=--force-confold",
             "-o",
             "APT::Get::Always-Include-Phased-Updates=true",
+            "--allow-downgrades",
+            "--allow-change-held-packages",
             "--download-only",
             "dist-upgrade",
         ],
@@ -1271,7 +1328,7 @@ fn run_dry_run_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()
     emit_debug(
         ctx,
         step,
-        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -s -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade",
+        "Commande: env DEBIAN_FRONTEND=noninteractive DEBIAN_PRIORITY=critical APT_LISTCHANGES_FRONTEND=none apt-get -s -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --allow-downgrades --allow-change-held-packages dist-upgrade",
         emit,
     )?;
 
@@ -1299,6 +1356,8 @@ fn run_dry_run_upgrade(ctx: AppContext, emit: &mut dyn FnMut(Event) -> Result<()
             "Dpkg::Options::=--force-confdef",
             "-o",
             "Dpkg::Options::=--force-confold",
+            "--allow-downgrades",
+            "--allow-change-held-packages",
             "dist-upgrade",
         ],
     )?;

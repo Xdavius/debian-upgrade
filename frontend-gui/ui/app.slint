@@ -7,6 +7,7 @@ export struct ThirdPartyRepo {
 
 export component AppWindow inherits Window {
     in-out property <int> current_page: 1;
+    in-out property <bool> debug_mode: false;
     in-out property <string> header_status: "Assistant pret";
     in-out property <color> header_status_color: #4f5b66;
     in-out property <string> logs_text: "[info] Demarrage de l'assistant.\n\n";
@@ -222,7 +223,8 @@ export component AppWindow inherits Window {
                             width: 124px;
                             height: 40px;
                             text: "Precedent";
-                        enabled: root.current_page > 1 && root.current_page < 7 && !root.action_in_progress;
+                            visible: root.debug_mode;
+                            enabled: root.debug_mode && root.current_page > 1 && root.current_page < 7 && !root.action_in_progress;
                             clicked => { root.go_prev(); }
                         }
                     }

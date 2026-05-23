@@ -17,6 +17,8 @@ ETC_SYSTEM_UPDATE_LINK="${OFFLINE_UPGRADE_ETC_SYSTEM_UPDATE_LINK:-${ROOT_PREFIX}
 OFFLINE_SIMULATE="${OFFLINE_UPGRADE_SIMULATE:-0}"
 POST_UPGRADE_STATUS_FILE="${OFFLINE_UPGRADE_POST_UPGRADE_STATUS_FILE:-${STATE_DIR}/post-upgrade-status.env}"
 POST_UPGRADE_PENDING_FILE="${OFFLINE_UPGRADE_POST_UPGRADE_PENDING_FILE:-${STATE_DIR}/post-upgrade-notify.pending}"
+TARGET_CODENAME_FILE="${OFFLINE_UPGRADE_TARGET_CODENAME_FILE:-${STATE_DIR}/target-codename}"
+APT_PIN_FILE="${OFFLINE_UPGRADE_APT_PIN_FILE:-${ROOT_PREFIX}/etc/apt/preferences.d/99-debian-upgrade-target.pref}"
 
 log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >>"${LOG_FILE}"
@@ -70,6 +72,33 @@ run_post_success_apt_clean() {
     log "apt clean termine avec succes."
   else
     log "apt clean en echec (non bloquant)."
+  fi
+}
+
+apply_apt_target_pin() {
+  if [ ! -f "${TARGET_CODENAME_FILE}" ]; then
+    log "Aucun codename cible sauvegarde (${TARGET_CODENAME_FILE}), pin APT inchange."
+    return 0
+  fi
+  local target_codename
+  target_codename="$(head -n1 "${TARGET_CODENAME_FILE}" | xargs)"
+  if [ -z "${target_codename}" ]; then
+    log "Codename cible vide dans ${TARGET_CODENAME_FILE}, pin APT ignore."
+    return 0
+  fi
+  install -d -m 0755 "$(dirname "${APT_PIN_FILE}")"
+  cat > "${APT_PIN_FILE}" <<EOF
+Package: *
+Pin: release n=${target_codename}
+Pin-Priority: 1001
+EOF
+  log "Pin APT applique vers '${target_codename}' (${APT_PIN_FILE})."
+}
+
+cleanup_apt_target_pin() {
+  if [ -f "${APT_PIN_FILE}" ]; then
+    rm -f "${APT_PIN_FILE}" || true
+    log "Pin APT supprime (${APT_PIN_FILE})."
   fi
 }
 
@@ -203,6 +232,7 @@ run_phase_upgrade() {
   export DEBIAN_FRONTEND=noninteractive
   export DEBIAN_PRIORITY=critical
   export APT_LISTCHANGES_FRONTEND=none
+  apply_apt_target_pin
 
   if [ "${OFFLINE_SIMULATE}" = "1" ]; then
     log "SIMULATE: apt-get full-upgrade"
@@ -217,6 +247,8 @@ run_phase_upgrade() {
       -o Dpkg::Options::=--force-confdef \
       -o Dpkg::Options::=--force-confold \
       -o APT::Get::Always-Include-Phased-Updates=true \
+      --allow-downgrades \
+      --allow-change-held-packages \
       full-upgrade \
       3> >(
         while IFS= read -r status_line; do
@@ -363,6 +395,7 @@ run_phase_dkms() {
 install -d -m 0755 "$(dirname "${LOG_FILE}")" "${STATE_DIR}"
 touch "${LOG_FILE}"
 chmod 0644 "${LOG_FILE}"
+trap cleanup_apt_target_pin EXIT
 
 log "Demarrage offline-upgrade.sh"
 plymouth_message "Mise a niveau Debian: preparation"
