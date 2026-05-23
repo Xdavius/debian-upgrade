@@ -122,7 +122,7 @@ export component AppWindow inherits Window {
                         text: root.current_page == 1
                             ? "Cet assistant vous guide pour preparer une mise a niveau majeure Debian de maniere controlee.\nVous allez verifier les sources APT, gerer les depots tiers, preparer les paquets, tester la procedure puis finaliser au redemarrage.\nIl est fortement recommande d'avoir mis a jour votre systeme et d'avoir redemarre avant de continuer la procedure.\nLorsque vous cliquerez sur Suivant, votre systeme commencera a etre modifie et les sources de la distribution seront modifiees."
                             : root.current_page == 2                        
-                            ? "Par securite, tous les depots tiers sont desactives par defaut. Vous pouvez les re-activer manuellement si necessaire."
+                            ? "Par securité, tous les dépôts tiers sont desactivés par defaut. Vous pouvez en ré-activer via simple coche dans la liste ci-dessous. ATTENTION : Le fait de laisser des dépôts tiers actifs peut mettre en péril la mise à niveau."
                             : root.current_page == 3
                             ? "Cette etape prepare les modules DKMS (ex: NVIDIA) pour limiter les risques pendant la mise a niveau du kernel."
                             : root.current_page == 4
