@@ -58,6 +58,9 @@ write_post_upgrade_status() {
 }
 
 run_reboot() {
+  plymouth_progress 100
+  plymouth_message "Please wait during system upgrade: 100%"
+  sleep 2
   if [ "${OFFLINE_SIMULATE}" = "1" ]; then
     log "SIMULATE: reboot demande"
     return 0

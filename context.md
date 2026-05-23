@@ -840,6 +840,21 @@ Responsabilités:
     - restauration tiers filtree par `/var/lib/debian-upgrade/third-party-reactivate.list` (au lieu de tous les fichiers marques).
 - Validation:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Ajustement UX fin de phase offline (demande utilisateur):
+  - avant reboot, le script force maintenant l'affichage progression a `100%` puis attend `2s`.
+  - implementation centralisee dans `run_reboot`:
+    - `plymouth_progress 100`
+    - `plymouth_message "Please wait during system upgrade: 100%"`
+    - `sleep 2`
+- Validation:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Correctif UX logs dry-run GUI (demande utilisateur):
+  - probleme corrige: la GUI pouvait passer a la page suivante avant affichage complet des derniers logs dry-run.
+  - implementation:
+    - ajout d'un helper `flush_pending_ui_events(...)` dans `frontend-gui/src/main.rs`,
+    - flush force des evenements logs tamponnes avant la transition de page apres `dry-run-upgrade` (mode local et fallback privilegie).
+- Validation:
+  - `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
 - Bump version projet vers `2.1.1`:
   - `backend-cli/Cargo.toml` -> `version = "2.1.1"`.
   - `frontend-gui/Cargo.toml` -> `version = "2.1.1"`.

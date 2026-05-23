@@ -549,6 +549,43 @@ fn publish_ui_event_batched(
     schedule_log_flush(ui.clone(), Arc::clone(pending), Arc::clone(scheduled));
 }
 
+// Force un flush immediat des logs en attente et attend la fin d'un scheduler actif.
+fn flush_pending_ui_events(
+    ui: &slint::Weak<AppWindow>,
+    pending: &Arc<Mutex<Vec<UiEvent>>>,
+    scheduled: &Arc<AtomicBool>,
+) {
+    for _ in 0..20 {
+        let mut lines = Vec::<String>::new();
+        if let Ok(mut p) = pending.lock() {
+            if !p.is_empty() {
+                lines.reserve(p.len());
+                for evt in p.drain(..) {
+                    lines.push(format!(
+                        "[{}] {} ({}, {})",
+                        evt.level, evt.message, evt.step, evt.state
+                    ));
+                }
+            }
+        }
+
+        if !lines.is_empty() {
+            let ui_apply = ui.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = ui_apply.upgrade() {
+                    append_logs_batch(&app, &lines);
+                }
+            });
+        }
+
+        let has_pending = pending.lock().map(|p| !p.is_empty()).unwrap_or(false);
+        if !has_pending && !scheduled.load(Ordering::SeqCst) {
+            break;
+        }
+        thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 // Détecte les dépôts tiers candidats dans /etc/apt/sources.list.d.
 fn detect_third_party_candidates() -> Vec<String> {
     let dir = Path::new("/etc/apt/sources.list.d");
@@ -1123,6 +1160,7 @@ fn main() -> Result<(), slint::PlatformError> {
                     Ok(())
                 };
                 let result = run_command(ctx, CoreCommand::DryRunUpgrade, &mut publish);
+                flush_pending_ui_events(&ui, &pending, &scheduled);
 
                 let _ = slint::invoke_from_event_loop(move || {
                     dry_run_upgrade_running_done.store(false, Ordering::SeqCst);
@@ -1150,18 +1188,22 @@ fn main() -> Result<(), slint::PlatformError> {
                                         let pending = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
                                         let scheduled = Arc::new(AtomicBool::new(false));
                                         let ui3 = ui2.clone();
+                                        let pending_stream = Arc::clone(&pending);
+                                        let scheduled_stream = Arc::clone(&scheduled);
+                                        let ui_stream = ui3.clone();
                                         let privileged = run_backend_subcommands_via_privileged_backend_stream(
                                             false,
                                             &["dry-run-upgrade".to_string()],
                                             move |evt| {
                                                 publish_ui_event_batched(
-                                                    &ui3,
-                                                    &pending,
-                                                    &scheduled,
+                                                    &ui_stream,
+                                                    &pending_stream,
+                                                    &scheduled_stream,
                                                     evt,
                                                 );
                                             },
                                         );
+                                        flush_pending_ui_events(&ui3, &pending, &scheduled);
                                         let _ = slint::invoke_from_event_loop(move || {
                                             if let Some(app) = ui2.upgrade() {
                                                 app.set_action_in_progress(false);
