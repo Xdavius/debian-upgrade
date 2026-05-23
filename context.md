@@ -840,6 +840,32 @@ Responsabilités:
     - restauration tiers filtree par `/var/lib/debian-upgrade/third-party-reactivate.list` (au lieu de tous les fichiers marques).
 - Validation:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Bump version projet vers `2.1.1`:
+  - `backend-cli/Cargo.toml` -> `version = "2.1.1"`.
+  - `frontend-gui/Cargo.toml` -> `version = "2.1.1"`.
+  - `upgrade-core/Cargo.toml` -> `version = "2.1.1"`.
+  - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="2.1.1"`.
+- Validation:
+  - `cargo check -p upgrade-core -p backend-cli -p frontend-gui` OK.
+- Ajustement affichage progression offline (demande utilisateur):
+  - detection du parametre `splash` dans `/proc/cmdline`:
+    - si `splash` est present et `plymouth` disponible -> mode Plymouth.
+    - sinon -> fallback console custom non intrusif.
+  - fallback console:
+    - efface l'ecran une seule fois au debut (`clear` ANSI),
+    - affiche un message de progression mis a jour sur la meme ligne (sans retour ligne).
+  - conservation de l'anti-spam: mise a jour sur changement de pourcentage entier uniquement.
+- Validation:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+- Ajustement UX Plymouth (demande utilisateur):
+  - reduction du spam de messages pendant l'upgrade offline:
+    - le message/progres Plymouth n'est plus rafraichi a chaque ligne `pmstatus`,
+    - rafraichissement uniquement si le pourcentage entier change.
+  - implementation:
+    - ajout d'un cache `LAST_PMSTATUS_PERCENT`,
+    - garde dans `report_status_line` pour ignorer les updates redundants.
+- Validation:
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
 - Ajustement UX navigation (demande utilisateur):
   - en mode normal, le bouton `Precedent` n'est plus affiche.
   - le bouton `Precedent` reste visible uniquement en mode debug.

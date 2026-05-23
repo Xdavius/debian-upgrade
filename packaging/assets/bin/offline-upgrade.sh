@@ -19,6 +19,9 @@ POST_UPGRADE_STATUS_FILE="${OFFLINE_UPGRADE_POST_UPGRADE_STATUS_FILE:-${STATE_DI
 POST_UPGRADE_PENDING_FILE="${OFFLINE_UPGRADE_POST_UPGRADE_PENDING_FILE:-${STATE_DIR}/post-upgrade-notify.pending}"
 TARGET_CODENAME_FILE="${OFFLINE_UPGRADE_TARGET_CODENAME_FILE:-${STATE_DIR}/target-codename}"
 APT_PIN_FILE="${OFFLINE_UPGRADE_APT_PIN_FILE:-${ROOT_PREFIX}/etc/apt/preferences.d/99-debian-upgrade-target.pref}"
+LAST_PMSTATUS_PERCENT="-1"
+USE_PLYMOUTH_UI="0"
+CONSOLE_UI_INITIALIZED="0"
 
 log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >>"${LOG_FILE}"
@@ -104,15 +107,39 @@ cleanup_apt_target_pin() {
 
 plymouth_progress() {
   local percent="$1"
-  if command -v plymouth >/dev/null 2>&1; then
+  if [ "${USE_PLYMOUTH_UI}" = "1" ] && command -v plymouth >/dev/null 2>&1; then
     plymouth system-update --progress="${percent}" >/dev/null 2>&1 || true
   fi
 }
 
+console_ui_message() {
+  local msg="$1"
+  if [ "${CONSOLE_UI_INITIALIZED}" != "1" ]; then
+    printf '\033[2J\033[H' > /dev/console 2>/dev/null || true
+    printf 'Debian Upgrade Assistant\n\n' > /dev/console 2>/dev/null || true
+    CONSOLE_UI_INITIALIZED="1"
+  fi
+  # Mise a jour sur une seule ligne sans retour, pour eviter le flood console.
+  printf '\r\033[2K%s' "${msg}" > /dev/console 2>/dev/null || true
+}
+
 plymouth_message() {
   local msg="$1"
-  if command -v plymouth >/dev/null 2>&1; then
+  if [ "${USE_PLYMOUTH_UI}" = "1" ] && command -v plymouth >/dev/null 2>&1; then
     plymouth message --text="${msg}" >/dev/null 2>&1 || true
+  else
+    console_ui_message "${msg}"
+  fi
+}
+
+init_progress_ui_mode() {
+  if grep -Eq '(^|[[:space:]])splash([[:space:]]|$)' /proc/cmdline 2>/dev/null \
+    && command -v plymouth >/dev/null 2>&1; then
+    USE_PLYMOUTH_UI="1"
+    log "UI progression: mode Plymouth (splash detecte)."
+  else
+    USE_PLYMOUTH_UI="0"
+    log "UI progression: mode console custom (splash absent ou Plymouth indisponible)."
   fi
 }
 
@@ -128,8 +155,11 @@ report_status_line() {
       if [[ "${percent}" =~ ^[0-9]+$ ]]; then
         if [ "${percent}" -lt 0 ]; then percent=0; fi
         if [ "${percent}" -gt 100 ]; then percent=100; fi
-        plymouth_progress "${percent}"
-        plymouth_message "$(printf 'Please wait during system upgrade: %3d%%' "${percent}")"
+        if [ "${percent}" != "${LAST_PMSTATUS_PERCENT}" ]; then
+          LAST_PMSTATUS_PERCENT="${percent}"
+          plymouth_progress "${percent}"
+          plymouth_message "$(printf 'Please wait during system upgrade: %3d%%' "${percent}")"
+        fi
       elif [ -n "${message}" ]; then
         plymouth_message "Please wait during system upgrade..."
       fi
@@ -398,6 +428,7 @@ chmod 0644 "${LOG_FILE}"
 trap cleanup_apt_target_pin EXIT
 
 log "Demarrage offline-upgrade.sh"
+init_progress_ui_mode
 plymouth_message "Mise a niveau Debian: preparation"
 plymouth_progress 3
 
