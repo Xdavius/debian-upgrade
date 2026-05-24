@@ -1,90 +1,170 @@
 # Debian Major Upgrade Assistant
 
-Outil de préparation et d'accompagnement pour les mises à niveau majeures Debian.
+Un assistant graphique pour préparer et sécuriser une montée de version majeure Debian, sans vous noyer dans les commandes système.
 
-Le projet est composé de deux briques:
+---
 
-- Un backend CLI qui vérifie les prérequis, prépare la machine, et orchestre la mise à niveau.
-- Une interface GUI (Rust + Slint) qui guide l'utilisateur étape par étape.
+## Pour qui ?
 
-## Objectif
+Cet outil est fait pour vous si vous voulez :
 
-Rendre la montée de version majeure Debian plus fiable, plus lisible et plus sûre, tout en gardant une expérience utilisateur simple.
+- savoir si une nouvelle version majeure Debian est disponible,
+- préparer la machine proprement avant upgrade,
+- suivre ce qui se passe étape par étape,
+- éviter les erreurs classiques pendant une migration sensible.
 
-## Structure initiale
+---
 
-- `context.md`: document de référence partagé (vision, architecture, roadmap, suivi).
-- `backend-cli/`: binaire CLI backend (adaptateur d'exécution).
-- `upgrade-core/`: librairie cœur (logique métier, étapes, événements).
-- `frontend-gui/`: interface graphique Slint.
-- `docs/`: documents d'architecture, procédures et décisions.
-- `build.sh`: script de build/test local générant un bundle test dans `buildtest/`.
+## Installation (recommandée)
 
-## Démarrage rapide
+Installez **la dernière release en `.deb`**.
+
+1. Ouvrez la page `Releases` du projet.
+2. Téléchargez le fichier `.deb` de la **release la plus récente**.
+3. Installez-le :
 
 ```bash
-cargo run -p backend-cli --bin debian-upgrade-backend -- --dry-run --debug run-all
-cargo run -p backend-cli --bin debian-upgrade-backend -- --dry-run defer week
+sudo apt install ./debian-upgrade_<VERSION>_amd64.deb
+```
+
+Important : ne partez pas d'une ancienne archive ou d'un build local si vous voulez un comportement stable. Prenez bien la **dernière release `.deb`**.
+
+Note pour les utilisateurs **Xorg** : vérifiez que le paquet `libxkbcommon-x11-0` est bien installé.
+
+```bash
+sudo apt install libxkbcommon-x11-0
+```
+
+---
+
+## Ce que fait l'application, simplement
+
+### 1) Vérifie si une montée majeure est disponible
+
+L'application compare votre version Debian actuelle avec la version stable suivante.
+
+Résultat :
+- si aucune mise à niveau n'est disponible, elle vous l'indique clairement,
+- sinon elle vous guide vers la préparation.
+
+### 2) Vous guide dans une interface claire
+
+L'interface avance par étapes visibles :
+
+1. Vérification release
+2. Sources APT
+3. Pilotes DKMS
+4. Préparation des paquets
+5. Dry-run d'upgrade
+6. Redémarrage pour phase offline
+
+Vous voyez l'état en direct (`en cours`, `ok`, `attention`, `erreur`) avec un journal lisible.
+
+### 3) Contrôle les sources APT
+
+Avant migration, l'outil :
+
+- vérifie les sources Debian,
+- désactive les dépôts tiers pour limiter les conflits,
+- garde la traçabilité des changements.
+
+Après upgrade, il peut réactiver uniquement les dépôts tiers que vous avez choisis.
+
+### 4) Prépare les paquets de manière sûre
+
+L'application lance les actions nécessaires (nettoyage, mise à jour des index, téléchargement des paquets) en mode non interactif pour éviter les blocages.
+
+### 5) Fait un test sans risque (dry-run)
+
+Un test `apt-get -s dist-upgrade` est exécuté pour simuler la montée de version avant le vrai redémarrage.
+
+Objectif : détecter les problèmes avant la phase critique.
+
+### 6) Gère le cas des pilotes DKMS
+
+L'outil prépare la liste DKMS à réinstaller et enchaîne une phase dédiée après la phase principale, uniquement si nécessaire.
+
+### 7) Lance la phase offline au redémarrage
+
+Quand tout est prêt, vous redémarrez depuis l'interface.
+
+Au boot, l'upgrade se fait en mode offline via `system-update` pour plus de robustesse, puis la machine redémarre normalement.
+
+### 8) Vous notifie automatiquement
+
+Le package installe un service/timer `systemd` qui vérifie périodiquement la disponibilité d'une nouvelle version majeure et envoie une notification interactive.
+
+Depuis cette notification, vous pouvez :
+- ouvrir l'assistant,
+- reporter (1 jour, 1 semaine, 1 mois).
+
+---
+
+## Expérience utilisateur
+
+- Interface centrée sur la lisibilité.
+- Progression visible étape par étape.
+- Logs en direct pour comprendre ce qui se passe.
+- Mode normal (utilisateur) + mode debug (tests).
+
+---
+
+## Utilisation rapide
+
+Une fois installé, lancez :
+
+```bash
+debian-upgrade
+```
+
+Le parcours recommandé est de suivre les étapes dans l'ordre jusqu'à l'écran final de redémarrage.
+
+---
+
+## Informations techniques
+
+### Composants
+
+- `frontend-gui` : interface graphique (Rust + Slint)
+- `backend-cli` : binaire d'orchestration
+- `upgrade-core` : logique métier partagée
+
+### Fichiers et scripts principaux
+
+- Script offline : `/usr/local/lib/debian-upgrade/offline-upgrade.sh`
+- Service offline : `/usr/lib/systemd/system/debian-upgrade-offline.service`
+- Vérification notification : `/usr/local/lib/debian-upgrade/check-upgrade-notify.sh`
+
+### Services systemd installés
+
+- `debian-upgrade-notify.service`
+- `debian-upgrade-notify.timer`
+- `debian-upgrade-offline.service`
+
+### Journaux utiles
+
+- Journal systemd :
+
+```bash
+journalctl -u debian-upgrade-offline.service -b
+```
+
+- Log offline détaillé :
+
+```bash
+/var/log/debian-upgrade-offline.log
+```
+
+### Structure du dépôt
+
+- `context.md` : vision, décisions et journal de suivi
+- `docs/` : documentation d'architecture
+- `packaging/` : assets et script de packaging
+- `build.sh` : build/test local
+
+### Build local (développeurs)
+
+```bash
 ./build.sh
+cargo check -p upgrade-core -p backend-cli -p frontend-gui
 ```
-
-## Dry-run GUI + CLI
-
-1. Compiler le backend:
-
-```bash
-cargo build -p backend-cli --bin debian-upgrade-backend
-```
-
-2. Lancer la GUI:
-
-```bash
-cargo run -p frontend-gui --bin debian-upgrade
-```
-
-3. Dans la GUI, cliquer sur `Dry-run integre` (recommande).
-4. Option de secours: `Dry-run process`.
-
-
-## GUI mode debug
-
-- Mode normal (par defaut):
-
-```bash
-cargo run -p frontend-gui --bin debian-upgrade
-```
-
-- Mode debug (bypass test):
-
-```bash
-cargo run -p frontend-gui --bin debian-upgrade -- --debug
-```
-
-## Notification automatique (service systemd root)
-
-Le package installe un timer `systemd` (system-wide, execute en root) qui verifie periodiquement la disponibilite d'une nouvelle version majeure Debian.
-
-- Service: `debian-upgrade-notify.service`
-- Timer: `debian-upgrade-notify.timer`
-- Script: `/usr/local/lib/debian-upgrade/check-upgrade-notify.sh`
-
-Comportement:
-
-1. Verifie internet et lance `debian-upgrade-backend check-new-release`.
-2. Si une nouvelle majeure est detectee, envoie une notification interactive aux sessions graphiques actives:
-   - utilisateur `root`,
-   - utilisateurs membres du groupe `sudo`.
-3. Notification:
-   - app name `Debian-Upgrade`,
-   - icone `system-software-update`,
-   - urgence `critical`,
-   - expiration `0` (persistante tant qu'aucune action n'est prise).
-4. Actions directement dans la notification:
-   - lancer la GUI,
-   - reporter 1 jour / 1 semaine / 1 mois.
-5. Le report est memorise par utilisateur cible dans `/var/lib/debian-upgrade/notify/`.
-
-Ancien comportement retire:
-
-- plus de popup `zenity`,
-- plus de timer `systemd --user`.

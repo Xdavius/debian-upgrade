@@ -117,13 +117,12 @@ plymouth_progress() {
 
 console_ui_message() {
   local msg="$1"
-  if [ "${CONSOLE_UI_INITIALIZED}" != "1" ]; then
-    printf '\033[2J\033[H' > /dev/console 2>/dev/null || true
-    printf 'Debian Upgrade Assistant\n\n' > /dev/console 2>/dev/null || true
-    CONSOLE_UI_INITIALIZED="1"
-  fi
-  # Mise a jour sur une seule ligne sans retour, pour eviter le flood console.
-  printf '\r\033[2K%s' "${msg}" > /dev/console 2>/dev/null || true
+  # Clear screen and move cursor to home position
+  printf '\033[2J\033[H' > /dev/console 2>/dev/null || true
+  printf '==================================================\n' > /dev/console 2>/dev/null || true
+  printf '            Debian Upgrade Assistant              \n' > /dev/console 2>/dev/null || true
+  printf '==================================================\n\n' > /dev/console 2>/dev/null || true
+  printf ' %s\n' "${msg}" > /dev/console 2>/dev/null || true
 }
 
 plymouth_message() {

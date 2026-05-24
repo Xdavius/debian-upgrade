@@ -9,8 +9,8 @@ Before=display-manager.service
 Type=oneshot
 ExecStart=/usr/local/lib/debian-upgrade/offline-upgrade.sh
 TimeoutStartSec=infinity
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=system-update.target

@@ -983,3 +983,22 @@ Responsabilités:
     - `trap cleanup_apt_target_pin EXIT` ajoute en initialisation du script.
 - Validation:
   - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+
+### 2026-05-24
+
+- Résolution du spam de messages sur la console lors des mises à niveau hors-ligne (sans Plymouth actif) :
+  - Modification de `packaging/assets/systemd/debian-upgrade-offline.service` pour définir `StandardOutput=journal` et `StandardError=journal` (au lieu de `journal+console`). Cela évite que les sorties et erreurs standard non redirigées des commandes du script ne soient affichées sur `/dev/console` par systemd. Tout reste disponible dans le journal systemd (`journalctl`) pour le débogage.
+  - Amélioration de la fonction `console_ui_message` dans `packaging/assets/bin/offline-upgrade.sh` pour nettoyer l'écran (`clear` console via séquence ANSI) et ré-imprimer un en-tête soigné et professionnel suivi du message de progression à chaque mise à jour. Cela évite que les messages de démarrage système (systemd, noyau) ne corrompent ou ne fassent défiler l'état de la mise à niveau.
+- Validation :
+  - `bash -n packaging/assets/bin/offline-upgrade.sh` OK.
+  - `cargo check -p frontend-gui -p upgrade-core -p backend-cli` OK.
+- Bump version projet vers `2.1.2`:
+  - `backend-cli/Cargo.toml` -> `version = "2.1.2"`.
+  - `frontend-gui/Cargo.toml` -> `version = "2.1.2"`.
+  - `upgrade-core/Cargo.toml` -> `version = "2.1.2"`.
+  - `packaging/pacstall/debian-upgrade.pacscript` -> `pkgver="2.1.2"`.
+- Refonte du `README.md` orientée utilisateur:
+  - contenu moins technique et plus pédagogique;
+  - parcours fonctionnel expliqué étape par étape en langage accessible;
+  - insistance explicite sur l'installation depuis la **dernière release `.deb`**;
+  - section `Informations techniques` déplacée et consolidée en fin de document.
